@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "predmaxim.yandex-music",
+  "name": "Yandex Music",
+  "version": "1.0.0",
+  "author": "predmaxim",
+  "description": "Yandex Music through ymd + mpv: queue, search, likes, My Wave with moods, wave by track",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "Yandex Music",
+    "description": "Yandex Music player",
+    "category": "Audio",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
