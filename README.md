@@ -13,13 +13,13 @@ git clone https://github.com/predmaxim/omarchy-yandex-music ~/Projects/omarchy-y
 
 ## Вход
 
-Откройте модалку (клик по значку или `omarchy-shell predmaxim.yandex-music toggle`): без токена там код устройства и QR со ссылкой. Подтвердите на телефоне — `ymd` сам опросит токен. Токен лежит в `~/.config/predmaxim.yandex-music/token` (права 0600, не в git). Протух — модалка снова предложит вход.
+Откройте модалку (Super+Shift+Y, клик по значку или `omarchy-shell predmaxim.yandex-music toggle`): без токена там код устройства и QR со ссылкой. Подтвердите на телефоне — `ymd` сам опросит токен. Токен лежит в `~/.config/predmaxim.yandex-music/token` (права 0600, не в git). Протух — модалка снова предложит вход.
 
 ## Управление
 
 | Что | Как |
 |---|---|
-| Открыть модалку | левый клик по значку, `omarchy-shell predmaxim.yandex-music toggle` |
+| Открыть модалку | Super+Shift+Y (привязка в `hyprland.lua` из `omarchy-dotfiles`), левый клик по значку, `omarchy-shell predmaxim.yandex-music toggle` |
 | Пауза / плей | правый клик по значку (пока есть звучащий трек), кнопка в шапке, медиаклавиши, Space из любой строки при пустом поле поиска, Enter сразу после открытия (курсор стоит на кнопке; ничего не играет — на первой строке) |
 | Следующий / предыдущий | медиаклавиши (`playerctl -p mpv next` / `previous`), кнопки в шапке — и в волне, и в «Мне нравится» |
 | Перемотка | ползунок под названием, Shift+← / Shift+→ — на 10 с; на строке перемотки «Моей волны» ← / → — на 10 с, с Shift — на 30 с |
