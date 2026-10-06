@@ -3,7 +3,7 @@ const fs = require("fs")
 const assert = require("assert")
 const load = (file, names) =>
   new Function(fs.readFileSync(__dirname + "/" + file, "utf8").replace(".pragma library", "") + "; return { " + names + " }")()
-const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position")
+const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore")
 const I = load("I18n.js", "TABLES, translator")
 const ru = I.translator("ru")
 
@@ -43,6 +43,14 @@ assert.deepStrictEqual(M.rows(st).map(r => r.current), [false, true])
 assert.deepStrictEqual(M.rows(st, 0).map(r => r.current), [true, false])   // optimistic marker
 assert.deepStrictEqual(M.rows(st, -1).map(r => r.current), [false, true])
 assert.strictEqual(M.searching(st), false)
+
+// Paging
+assert.strictEqual(M.parse('{"auth":"ok"}').has_more, false)
+assert.strictEqual(M.parse('{"auth":"ok","has_more":true,"loading":true}').loading, true)
+assert.strictEqual(M.wantMore({ has_more: true, loading: false }, 20, -1), true)
+assert.strictEqual(M.wantMore({ has_more: true, loading: false }, 20, 20), false)
+assert.strictEqual(M.wantMore({ has_more: true, loading: true }, 20, -1), false)
+assert.strictEqual(M.wantMore({ has_more: false, loading: false }, 20, -1), false)
 
 // Seek bar
 assert.deepStrictEqual([0, 5, 65, 3599, 61.9, undefined].map(M.fmtTime), ["0:00", "0:05", "1:05", "59:59", "1:01", "0:00"])

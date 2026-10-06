@@ -69,6 +69,11 @@ class FakeApi:
         async def fetch(): return self.likes
         return NS(tracks=[NS(id=str(t.id)) for t in self.likes], fetch_tracks_async=fetch)
 
+    async def tracks(self, ids):
+        self.tracks_calls = getattr(self, "tracks_calls", []) + [list(ids)]
+        by = {str(t.id): t for t in self.likes}
+        return [by[i] for i in ids if i in by]
+
     async def rotor_station_tracks(self, station, queue=None):
         self.rotor_calls.append((station, queue))
         batch = self.wave_batches[min(len(self.rotor_calls) - 1, len(self.wave_batches) - 1)]
@@ -91,6 +96,6 @@ class FakeApi:
     async def users_likes_tracks_remove(self, track_id): self.liked_add.remove(track_id); return True
     async def users_dislikes_tracks_add(self, track_id): self.disliked.append(track_id); return True
 
-    async def search(self, text, type_="all"):
-        self.searched.append((text, type_))
+    async def search(self, text, type_="all", page=0):
+        self.searched.append((text, type_)) if page == 0 else self.searched.append((text, type_, page))
         return NS(tracks=self.search_tracks)

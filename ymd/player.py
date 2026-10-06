@@ -19,6 +19,8 @@ MOODS = ["all", "fun", "active", "calm", "sad"]
 FADE_S = 3
 FADE_IN = f"af=lavfi=[afade=t=in:d={FADE_S}]"  # per-file: mpv resets it with the next file
 URL_TTL = 600
+PAGE = 20
+IDS_TTL = 300
 
 
 class Player:
@@ -31,24 +33,81 @@ class Player:
         self.source = {"type": "none", "title": "", "mood": ""}
         self.station, self.liked = None, set()
         self.playing, self.time_pos, self.last_end, self.error = False, 0.0, None, None
-        self.search_text, self.results = "", []
+        self.search_text, self.results, self.search_page, self.search_total = "", [], 0, 0
+        self.like_ids, self.like_ids_at, self.like_off, self.likes_page1 = [], None, 0, None
+        self.loading = False
         self.lock = asyncio.Lock()
 
     # --- sources -----------------------------------------------------------
     async def load_likes(self):
-        self.liked = {str(t.id) for t in (await self.api.users_likes_tracks()).tracks}
+        await self._likes_ids(True)
+
+    async def _likes_ids(self, force=False):
+        """Every liked id (cheap list); refreshed at most every 5 minutes."""
+        if force or self.like_ids_at is None or time.monotonic() - self.like_ids_at > IDS_TTL:
+            self.like_ids = [str(t.id) for t in (await self.api.users_likes_tracks()).tracks]
+            self.like_ids_at = time.monotonic()
+            self.liked = set(self.like_ids)
 
     async def start_likes(self):
-        tl = await self.api.users_likes_tracks()
-        self.liked = {str(t.id) for t in tl.tracks}
         async with self.lock:
-            queue = [tracks.info(t) for t in await tl.fetch_tracks_async()]
-            if not queue:
-                self.error = "nothing to play"; self.notify(); return
-            self.station, self.queue = None, queue
+            self.station, self.queue = None, []
             self.source = {"type": "likes", "title": "", "mood": ""}
             await self._detach()
+            self.loading = True
+            self.notify()  # the source switch shows at once; the first page follows
+            try:
+                await self._likes_ids()
+                if not self.like_ids:
+                    self.error = "nothing to play"; return
+                first = tuple(self.like_ids[:PAGE])
+                if self.likes_page1 and self.likes_page1[0] == first:
+                    self.queue, self.like_off = list(self.likes_page1[1]), len(first)
+                else:
+                    self.like_off = 0
+                    await self._more_likes()
+                    self.likes_page1 = (first, list(self.queue))
+            finally:
+                self.loading = False
+                self.notify()
+
+    async def _more_likes(self):
+        ids = self.like_ids[self.like_off:self.like_off + PAGE]
+        if ids:
+            self.like_off += len(ids)
+            self.queue += [tracks.info(t) for t in await self.api.tracks(ids)]
+
+    async def _refill(self):
+        """The queue is running out: next page / next rotor batch."""
+        if self.station:
+            await self._fetch_station()
+        elif self.source["type"] == "likes":
+            await self._more_likes()
+
+    async def more(self):
+        """The list was scrolled to its end: append the next page of what is shown."""
+        async with self.lock:
+            if self.loading or not self._has_more():
+                return
+            self.loading = True
             self.notify()
+            try:
+                if self.search_text:
+                    self.search_page += 1
+                    resp = await self.api.search(self.search_text, type_="track", page=self.search_page)
+                    self.results += [tracks.info(t) for t in (resp.tracks.results or [])] if resp and resp.tracks else []
+                else:
+                    await self._refill()
+            finally:
+                self.loading = False
+                self.notify()
+
+    def _has_more(self):
+        if self.search_text:
+            return len(self.results) < self.search_total
+        if self.station:
+            return True
+        return self.source["type"] == "likes" and self.like_off < len(self.like_ids)
 
     async def start_wave(self, mood):
         if mood:
@@ -64,7 +123,12 @@ class Player:
         async with self.lock:
             self.station, self.queue, self.source = station, [], source
             await self._detach()
-            await self._fetch_station()
+            self.loading = True
+            self.notify()  # the source switch shows at once; the first batch follows
+            try:
+                await self._fetch_station()
+            finally:
+                self.loading = False
             if not self.queue:
                 self.error = "nothing to play"; self.notify(); return
             self.radio_pending = True  # radioStarted goes out with the first play
@@ -95,6 +159,8 @@ class Player:
             else:
                 resp = await self.api.search(text, type_="track")
                 self.results = [tracks.info(t) for t in (resp.tracks.results or [])] if resp.tracks else []
+                self.search_page = 0
+                self.search_total = (getattr(resp.tracks, "total", 0) or 0) if resp.tracks else 0
             self.notify()
 
     async def play_search(self, i):
@@ -172,8 +238,8 @@ class Player:
                     break
                 playable_i += 1
                 # Fetch more tracks for stations if needed
-                if self.station and playable_i >= len(self.queue):
-                    await self._fetch_station()
+                if playable_i >= len(self.queue):
+                    await self._refill()
                 if playable_i >= len(self.queue):
                     # No playable tracks found: mpv keeps what it had
                     restore()
@@ -248,8 +314,8 @@ class Player:
 
     async def _append_next(self):
         n = self.index + 1
-        if self.station and n >= len(self.queue) - 1:
-            await self._fetch_station()
+        if n >= len(self.queue) - 1:
+            await self._refill()
         if n < len(self.queue):
             url = await self._url(n)
             if url is not None:
@@ -371,8 +437,8 @@ class Player:
         """Lock held. At the edge of the window (neighbour not loaded) play from the queue."""
         n = self.index + d
         if n >= 0 and (not self.loaded or self.loaded[-1 if d > 0 else 0] == self.index):
-            if d > 0 and self.station and n >= len(self.queue):
-                await self._fetch_station()
+            if d > 0 and n >= len(self.queue):
+                await self._refill()
             if n < len(self.queue):
                 await self._play(n, kind)
                 return
@@ -393,8 +459,13 @@ class Player:
             tid = self.queue[self.index]["id"]
             if tid in self.liked:
                 await self.api.users_likes_tracks_remove(tid); self.liked.discard(tid)
+                if tid in self.like_ids:
+                    k = self.like_ids.index(tid); self.like_ids.remove(tid)
+                    self.like_off -= k < self.like_off
             else:
                 await self.api.users_likes_tracks_add(tid); self.liked.add(tid)
+                if tid not in self.like_ids:
+                    self.like_ids.insert(0, tid); self.like_off += 1
             self.notify()
 
     async def dislike(self):
@@ -412,6 +483,7 @@ class Player:
         return {"source": self.source, "moods": MOODS, "playing": self.playing, "track": track,
                 "queue": [row(t) for t in self.queue], "index": self.index,
                 "position": self.time_pos, "duration": self.duration,
+                "has_more": self._has_more(), "loading": self.loading,
                 "search": {"text": self.search_text,
                            "results": [dict(row(t), album=t["album"]) for t in self.results]},
                 "error": self.error}
