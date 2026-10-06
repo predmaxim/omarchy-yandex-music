@@ -709,16 +709,28 @@ async def test_failed_play_of_browsed_row_keeps_play_queue():
     assert p.state()["index"] == -1
 
 
-async def test_play_queue_keeps_its_mood_while_another_is_browsed():
+async def test_mood_change_restarts_the_playing_wave():
     p, api, mpv, _ = make()
     await wave(p, "calm")
-    await p.start_wave("fun")
+    api.wave_batches = [[track(300 + i) for i in range(5)]]; api.rotor_calls.clear()
+    await p.start_wave("fun"); await p.settle()
     assert [s[1] for s in api.settings] == ["calm", "fun"]
+    assert p.play_queue is p.queue and p.play_source["mood"] == "fun" and p.now["id"] == "300"
+    assert mpv.playlist == ["url300", "url301"] and p.state()["index"] == 0
+    await p.start_wave("fun")                                         # the same mood: nothing restarts
+    assert p.now["id"] == "300" and len(api.rotor_calls) == 1
     for i in range(1, 4):
-        await pos(p, min(i, 2))                                       # the play queue refills
-    assert [s[1] for s in api.settings] == ["calm", "fun", "calm"]
-    await p.start_wave("calm")
-    assert p.queue is p.play_queue and p.state()["index"] == p.index
+        await pos(p, min(i, 2))                                       # the play queue refills in its mood
+    assert [s[1] for s in api.settings] == ["calm", "fun"]
+
+
+async def test_mood_change_while_another_source_plays_only_browses():
+    p, api, mpv, _ = make()
+    await likes(p)
+    calls = len(mpv.calls)
+    await p.start_wave("fun"); await p.settle()
+    assert mpv.calls[calls:] == [] and p.play_source["type"] == "likes" and p.now["id"] == "0"
+    assert p.source == {"type": "wave", "title": "", "mood": "fun"} and len(p.queue) == 5
 
 
 # --- v4 ---

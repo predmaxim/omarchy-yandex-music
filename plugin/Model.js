@@ -14,11 +14,15 @@ var ICONS = {
   dislike: String.fromCodePoint(0xF0512),  // thumb_down_outline
   like: String.fromCodePoint(0xF02D5),     // heart_outline
   liked: String.fromCodePoint(0xF02D1),    // heart
-  wave: String.fromCodePoint(0xF0411)      // playlist_play
+  wave: String.fromCodePoint(0xF0411),     // playlist_play
+  myWave: String.fromCodePoint(0xF0388)    // the My Wave screen before the wave starts
 }
 
 // Header buttons, in cursor order (Panel.head = index).
 var HEAD = ["prev", "toggle", "next", "dislike", "like"]
+// The My Wave screen: its buttons by view, and the source row above them.
+var WAVE_CONTROLS = { playing: ["dislike", "prev", "toggle", "next", "like"], idle: ["start"] }
+var SOURCE_ROW = ["wave", "likes", "mood"]
 
 var MOOD_LABELS = { all: "Any", fun: "Fun", active: "Energetic", calm: "Calm", sad: "Sad" }
 
@@ -49,8 +53,10 @@ function view(st) {
   return { lit: true, icon: st.playing ? ICONS.playing : ICONS.paused, tip: "%1 — %2", arg: st.track.artists, arg2: st.track.title }
 }
 
+function moodLabel(mood, tr) { return tr(MOOD_LABELS[mood || "all"] || mood) }
+
 function sourceName(src, tr) {
-  if (src.type === "wave") return tr("My Wave") + (src.mood && src.mood !== "all" ? " · " + tr(MOOD_LABELS[src.mood] || src.mood) : "")
+  if (src.type === "wave") return tr("My Wave") + (src.mood && src.mood !== "all" ? " · " + moodLabel(src.mood, tr) : "")
   if (src.type === "likes") return tr("Liked")
   if (src.type === "track-wave") return tr("Wave by track «%1»", src.title)
   if (src.type === "search") return tr("Search «%1»", src.title)
@@ -108,3 +114,27 @@ function wantMore(st, shownCount, askedAt) {
 
 // Right click on the bar icon pauses/resumes whenever a track is audible.
 function canToggle(st) { return !!(st && st.running && st.auth === "ok" && st.track) }
+
+// My Wave screen: "playing" while the wave is the play source, "idle" before it starts; null on other lists.
+function waveView(st) {
+  if (!st || st.auth !== "ok" || !st.source || st.source.type !== "wave" || searching(st)) return null
+  return st.play_source && st.play_source.type === "wave" ? "playing" : "idle"
+}
+
+function waveControls(st) { return WAVE_CONTROLS[waveView(st)] || [] }
+
+// A header / wave button: "start" plays the browsed wave from its first track (it becomes the play source).
+function controlCmd(name) { return name === "start" ? cmd("play", { index: 0 }) : cmd(name) }
+
+function control(name, st) {
+  if (name === "toggle") return st.playing ? { icon: ICONS.paused, tip: "Pause" } : { icon: ICONS.play, tip: "Play" }
+  if (name === "like") return { icon: st.track && st.track.liked ? ICONS.liked : ICONS.like, tip: "Like" }
+  return { prev: { icon: ICONS.prev, tip: "Previous" }, next: { icon: ICONS.next, tip: "Next" },
+           dislike: { icon: ICONS.dislike, tip: "Dislike" }, start: { icon: ICONS.play, tip: "Play" } }[name]
+}
+
+// Mood for the Wave chip: the wave that plays (or is browsed) again, not a restart as "any".
+function waveMood(st) {
+  var w = [st.play_source, st.source].filter(function(s) { return s && s.type === "wave" })[0]
+  return w ? w.mood : "all"
+}

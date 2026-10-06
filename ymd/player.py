@@ -138,12 +138,14 @@ class Player:
     async def start_track_wave(self, track_id):
         known = {t["id"]: t for t in self.queue + self.results}
         title = known.get(track_id, {}).get("title", "")
-        await self._start_station(f"track:{track_id}", {"type": "track-wave", "title": title, "mood": ""}, play=True)
+        await self._start_station(f"track:{track_id}", {"type": "track-wave", "title": title, "mood": ""}, fresh=True)
 
-    async def _start_station(self, station, source, play=False):
+    async def _start_station(self, station, source, fresh=False):
+        """fresh: play it from scratch now (wave by a track). Another mood of the playing station plays at once too."""
         async with self.lock:
-            if self._show(source, station, reuse=not play):  # wave by a track always starts afresh
+            if self._show(source, station, reuse=not fresh):
                 return
+            play = fresh or self.play_feed.station == station
             try:
                 await self._fetch_station(self.feed)
             finally:
