@@ -3,7 +3,7 @@ const fs = require("fs")
 const assert = require("assert")
 const load = (file, names) =>
   new Function(fs.readFileSync(__dirname + "/" + file, "utf8").replace(".pragma library", "") + "; return { " + names + " }")()
-const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD, syncRows, waveView, waveControls, controlCmd, control, waveMood, moodLabel, SOURCE_ROW")
+const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD, syncRows, waveView, waveControls, controlCmd, control, waveMood, moodLabel, SOURCE_ROW, controlEnabled")
 const I = load("I18n.js", "TABLES, translator")
 const ru = I.translator("ru")
 
@@ -128,6 +128,11 @@ assert.deepStrictEqual(M.control("like", st), { icon: M.ICONS.liked, tip: "Like"
 assert.deepStrictEqual(M.control("like", at({ track: null })), { icon: M.ICONS.like, tip: "Like" })
 assert.deepStrictEqual(M.control("start", st), { icon: M.ICONS.play, tip: "Play" })
 assert.deepStrictEqual(["prev", "next", "dislike"].map(n => M.control(n, st).icon), [M.ICONS.prev, M.ICONS.next, M.ICONS.dislike])
+// Buttons stay in place; without an audible track they are disabled (▶ on the idle wave screen always works)
+for (const n of M.HEAD) assert.strictEqual(M.controlEnabled(n, st), true, n)
+for (const n of M.HEAD) assert.strictEqual(M.controlEnabled(n, at({ track: null })), false, n)
+assert.strictEqual(M.controlEnabled("start", at({ track: null })), true)
+assert.strictEqual(M.controlEnabled("toggle", M.OFFLINE), false)
 // The Wave chip goes back to the wave that plays (or is browsed) instead of restarting it as "any"
 assert.strictEqual(M.waveMood(wv({ source: { type: "likes", title: "", mood: "" } })), "calm")
 assert.strictEqual(M.waveMood(at({ play_source: { type: "likes", title: "", mood: "" } })), "calm")   // browsed wave

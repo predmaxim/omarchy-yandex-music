@@ -126,6 +126,9 @@ function waveControls(st) { return WAVE_CONTROLS[waveView(st)] || [] }
 // A header / wave button: "start" plays the browsed wave from its first track (it becomes the play source).
 function controlCmd(name) { return name === "start" ? cmd("play", { index: 0 }) : cmd(name) }
 
+// Enabled while a track is audible; ▶ (start the wave) always.
+function controlEnabled(name, st) { return name === "start" || canToggle(st) }
+
 function control(name, st) {
   if (name === "toggle") return st.playing ? { icon: ICONS.paused, tip: "Pause" } : { icon: ICONS.play, tip: "Play" }
   if (name === "like") return { icon: st.track && st.track.liked ? ICONS.liked : ICONS.like, tip: "Like" }

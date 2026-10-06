@@ -120,8 +120,7 @@ Panel {
     else event.accepted = false
   }
 
-  function canUse(name) { return name === "start" || root.hasTrack }
-  function activate(name) { if (name && root.canUse(name)) link.send(Model.controlCmd(name)) }
+  function activate(name) { if (name && Model.controlEnabled(name, root.music)) link.send(Model.controlCmd(name)) }
 
   function pickSource(v) {
     if (v === "mood") moodBox.open()
@@ -180,14 +179,14 @@ Panel {
     height: width
     tooltipText: root.tr(look.tip)
     hasCursor: root.head === at && at >= 0
-    enabled: root.canUse(name)
+    enabled: Model.controlEnabled(name, root.music)
     foreground: enabled ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.4)
     fontFamily: root.bar.fontFamily
     onClicked: root.activate(name)
     onHovered: function(h) { if (h && control.at >= 0) { root.cur = -1; root.srcCur = -1; root.head = control.at } }
   }
 
-  // elapsed · slider · total
+  // elapsed · slider · total; dimmed while disabled (no audible track)
   component SeekRow: Row {
     id: seekRow
     spacing: Style.space(8)
@@ -206,6 +205,8 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
       width: seekRow.width - elapsed.width - total.width - seekRow.spacing * 2
       bar: root.bar
+      fillColor: seekRow.enabled ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.4)
+      knobColor: fillColor
       minimum: 0
       maximum: Math.max(1, root.music.duration || 1)
       value: root.pos
@@ -378,8 +379,8 @@ Panel {
               font.pixelSize: Style.font.display
             }
           }
-          trailingControl: Row {
-            visible: root.loggedIn && !!root.music.track
+          trailingControl: Row {   // always there while logged in: disabled, not hidden, without a track
+            visible: root.loggedIn
             spacing: Style.space(10)
             Repeater {
               model: Model.HEAD
@@ -392,10 +393,10 @@ Panel {
           }
         }
 
-        // Seek bar: only with a track loaded
         SeekRow {
           id: headSeek
-          visible: !root.wave && root.hasTrack && root.music.duration > 0
+          visible: !root.wave && root.loggedIn
+          enabled: root.hasTrack
           width: parent.width
         }
 
