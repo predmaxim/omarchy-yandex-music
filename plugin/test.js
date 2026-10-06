@@ -98,6 +98,7 @@ const sp = at({ position: 10, duration: 100 })
 assert.strictEqual(M.position(sp, 2500), 12.5)
 assert.strictEqual(M.position(at({ position: 10, duration: 100, playing: false }), 2500), 10)
 assert.strictEqual(M.position(at({ position: 99, duration: 100 }), 5000), 100)
+assert.strictEqual(M.position(at({ position: 2, duration: 0 }), 5000), 0)   // the new file still opening: no length yet
 const ss = at({ search: { text: "сплин", results: [{ id: "9", title: "Орбит", artists: "Сплин", album: "Гранатовый" }] } })
 assert.strictEqual(M.searching(ss), true)
 assert.deepStrictEqual(M.rows(ss), [{ id: "9", title: "Орбит", artists: "Сплин · Гранатовый", current: false }])
