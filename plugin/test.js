@@ -3,7 +3,7 @@ const fs = require("fs")
 const assert = require("assert")
 const load = (file, names) =>
   new Function(fs.readFileSync(__dirname + "/" + file, "utf8").replace(".pragma library", "") + "; return { " + names + " }")()
-const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD")
+const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD, syncRows")
 const I = load("I18n.js", "TABLES, translator")
 const ru = I.translator("ru")
 
@@ -59,6 +59,27 @@ assert.strictEqual(M.wantMore({ has_more: true, loading: false }, 20, -1), true)
 assert.strictEqual(M.wantMore({ has_more: true, loading: false }, 20, 20), false)
 assert.strictEqual(M.wantMore({ has_more: true, loading: true }, 20, -1), false)
 assert.strictEqual(M.wantMore({ has_more: false, loading: false }, 20, -1), false)
+
+// The list model is updated in place (a reassigned model throws the list back to the top)
+const fakeModel = () => {
+  const m = { rows: [], ops: [] }
+  Object.defineProperty(m, "count", { get: () => m.rows.length })
+  m.get = i => m.rows[i]
+  m.set = (i, r) => { m.ops.push("set " + i); m.rows[i] = Object.assign({}, r) }
+  m.append = r => { m.ops.push("append"); m.rows.push(Object.assign({}, r)) }
+  m.remove = (i, n) => { m.ops.push("remove " + i + " " + n); m.rows.splice(i, n) }
+  return m
+}
+const page = (n, cur) => Array.from({ length: n }, (_, i) => ({ id: "" + i, title: "t" + i, artists: "a", current: i === cur }))
+const lm = fakeModel()
+M.syncRows(lm, page(20, 3))
+assert.strictEqual(lm.count, 20)
+lm.ops = []; M.syncRows(lm, page(40, 3))
+assert.deepStrictEqual(lm.ops, Array(20).fill("append"))           // next page: appended, rows above untouched
+lm.ops = []; M.syncRows(lm, page(40, 4))
+assert.deepStrictEqual(lm.ops, ["set 3", "set 4"])                 // marker moved: two rows changed
+lm.ops = []; M.syncRows(lm, page(5, -1))
+assert.deepStrictEqual(lm.ops, ["remove 5 35", "set 4"]); assert.deepStrictEqual(lm.rows, page(5, -1))
 
 // Header cursor order and the bar icon's right click
 assert.deepStrictEqual(M.HEAD, ["prev", "toggle", "next", "dislike", "like"])
