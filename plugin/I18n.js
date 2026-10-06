@@ -12,6 +12,8 @@ var TABLES = {
     "Wave": "Волна", "Liked": "Мне нравится",
     "My Wave": "Моя волна", "Wave by track «%1»": "Волна по треку «%1»", "Search «%1»": "Поиск «%1»",
     "Error: %1": "Ошибка: %1",
+    "login code expired, try again": "Код входа истёк, попробуйте снова",
+    "nothing to play": "Нечего играть", "track unavailable": "Трек недоступен",
     "Any": "Любое", "Fun": "Весёлое", "Energetic": "Бодрое", "Calm": "Спокойное", "Sad": "Грустное",
     "Like": "Нравится", "Dislike": "Не нравится", "Wave by this track": "Волна по треку",
     "Log in": "Войти",

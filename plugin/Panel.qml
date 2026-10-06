@@ -318,7 +318,7 @@ Panel {
             focusable: false
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
-            onChanged: function(v) { if (v === "wave") root.send("wave", { mood: null }); else root.send("playlist") }
+            onChanged: function(v) { if (v === "wave") root.send("wave", { mood: "all" }); else root.send("playlist") }
           }
           Dropdown {
             visible: root.music.source.type === "wave"

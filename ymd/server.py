@@ -9,7 +9,7 @@ import json
 import logging
 import subprocess
 
-from yandex_music.exceptions import UnauthorizedError, YandexMusicError
+from yandex_music.exceptions import DeviceAuthError, UnauthorizedError, YandexMusicError
 
 from . import auth
 from .mpv import MpvError
@@ -97,6 +97,12 @@ class Daemon:
             self.broadcast()
         try:
             self._cancel_retry()
+            if self.player:  # re-login: don't stack a second session on the old playlist
+                try:
+                    await self.player.mpv.command("stop")
+                except Exception as e:
+                    log.warning("stop on re-login failed: %s", e)
+                self.player = None
             self.auth = "pending"; self.broadcast()
             token = await auth.login(await self.make_client(None), shown)
             auth.save_token(token, self.token_path)
@@ -104,7 +110,8 @@ class Daemon:
             await self.boot()
         except Exception as e:
             log.warning("login failed: %s", e)
-            self.auth, self.login_info, self.error = "none", None, str(e)
+            self.auth, self.login_info = "none", None
+            self.error = "login code expired, try again" if isinstance(e, (DeviceAuthError, TimeoutError)) else str(e)
         self.broadcast()
 
     async def handle(self, line):
