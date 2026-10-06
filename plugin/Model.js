@@ -8,8 +8,14 @@ var ICONS = {
   playing: String.fromCodePoint(0xF075A),
   paused: String.fromCodePoint(0xF03E4),
   off: String.fromCodePoint(0xF075B),
-  login: String.fromCodePoint(0xF0306)
+  login: String.fromCodePoint(0xF0306),
+  prev: String.fromCodePoint(0xF04AE),
+  next: String.fromCodePoint(0xF04AD),
+  play: String.fromCodePoint(0xF040A)
 }
+
+// Header buttons, in cursor order (Panel.head = index).
+var HEAD = ["prev", "toggle", "next", "dislike", "like"]
 
 var MOOD_LABELS = { all: "Any", fun: "Fun", active: "Energetic", calm: "Calm", sad: "Sad" }
 
@@ -84,3 +90,6 @@ function position(st, elapsedMs) {
 function wantMore(st, shownCount, askedAt) {
   return !!st.has_more && !st.loading && shownCount > 0 && askedAt !== shownCount
 }
+
+// Right click on the bar icon pauses/resumes whenever a track is audible.
+function canToggle(st) { return !!(st && st.running && st.auth === "ok" && st.track) }

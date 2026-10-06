@@ -3,7 +3,7 @@ const fs = require("fs")
 const assert = require("assert")
 const load = (file, names) =>
   new Function(fs.readFileSync(__dirname + "/" + file, "utf8").replace(".pragma library", "") + "; return { " + names + " }")()
-const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore")
+const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD")
 const I = load("I18n.js", "TABLES, translator")
 const ru = I.translator("ru")
 
@@ -51,6 +51,12 @@ assert.strictEqual(M.wantMore({ has_more: true, loading: false }, 20, -1), true)
 assert.strictEqual(M.wantMore({ has_more: true, loading: false }, 20, 20), false)
 assert.strictEqual(M.wantMore({ has_more: true, loading: true }, 20, -1), false)
 assert.strictEqual(M.wantMore({ has_more: false, loading: false }, 20, -1), false)
+
+// Header cursor order and the bar icon's right click
+assert.deepStrictEqual(M.HEAD, ["prev", "toggle", "next", "dislike", "like"])
+assert.strictEqual(M.canToggle(st), true)
+assert.strictEqual(M.canToggle(at({ track: null })), false)
+assert.strictEqual(M.canToggle(M.OFFLINE), false)
 
 // Seek bar
 assert.deepStrictEqual([0, 5, 65, 3599, 61.9, undefined].map(M.fmtTime), ["0:00", "0:05", "1:05", "59:59", "1:01", "0:00"])
