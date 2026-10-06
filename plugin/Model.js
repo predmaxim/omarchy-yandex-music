@@ -14,13 +14,15 @@ var ICONS = {
 var MOOD_LABELS = { all: "Any", fun: "Fun", active: "Energetic", calm: "Calm", sad: "Sad" }
 
 var OFFLINE = { running: false, auth: "none", login: null, source: { type: "none", title: "", mood: "" }, moods: [],
-  playing: false, track: null, queue: [], index: -1, position: 0, duration: 0, search: { text: "", results: [] }, error: null }
+  playing: false, track: null, queue: [], index: -1, position: 0, duration: 0, has_more: false, loading: false, search: { text: "", results: [] }, error: null }
 
 function parse(line) {
   var s = null
   try { s = JSON.parse(line) } catch (e) { return null }
   if (!s || typeof s.auth !== "string") return null
   s.running = true
+  s.has_more = !!s.has_more
+  s.loading = !!s.loading
   return s
 }
 
@@ -76,4 +78,9 @@ function fmtTime(s) {
 function position(st, elapsedMs) {
   var p = (st.position || 0) + (st.playing ? elapsedMs / 1000 : 0)
   return st.duration > 0 ? Math.min(p, st.duration) : p
+}
+
+// Ask for the next page once per list length, when ymd has more and is not busy.
+function wantMore(st, shownCount, askedAt) {
+  return !!st.has_more && !st.loading && shownCount > 0 && askedAt !== shownCount
 }

@@ -27,6 +27,7 @@ Panel {
   property int cur: -1
   property bool btnFocus: false
   property int head: -1
+  property int askedAt: -1        // list length at the last "more" request
   property int seenIndex: -1
   property int pendingIndex: -1   // row clicked, shown as current until ymd confirms
   property real pos: 0            // seek bar position, interpolated between state lines
@@ -52,6 +53,12 @@ Panel {
   }
   onPendingIndexChanged: refreshRows()
 
+  function requestMore() {
+    if (!Model.wantMore(root.music, root.shown.length, root.askedAt)) return
+    root.askedAt = root.shown.length
+    root.send("more")
+  }
+
   function seekTo(s) {
     var d = root.music.duration || 0
     s = Math.max(0, d > 0 ? Math.min(s, d) : s)
@@ -75,6 +82,7 @@ Panel {
     if (i < 0) { if (root.hasTrack) { root.cur = -1; root.head = 1 } return }
     if (root.shown.length === 0) return
     root.cur = Math.min(root.shown.length - 1, i)
+    if (root.cur >= root.shown.length - 1) root.requestMore()
     moveGate.reset()
     list.positionViewAtIndex(root.cur, ListView.Contain)
   }
@@ -112,6 +120,7 @@ Panel {
     if (root.shown.length === 0) { root.cur = -1; root.btnFocus = false }
     else if (root.cur >= root.shown.length) root.cur = root.shown.length - 1
     if (root.cur >= 0) Qt.callLater(function() { list.positionViewAtIndex(root.cur, ListView.Contain) })
+    Qt.callLater(root.requestMore)   // a short list that does not fill the window
   }
   onHasTrackChanged: if (!root.hasTrack) root.head = -1
   onLoggedInChanged: Qt.callLater(root.focusInput)
@@ -414,6 +423,7 @@ Panel {
           spacing: Style.spacing.xs
           boundsBehavior: Flickable.StopAtBounds
           model: root.shown
+          onContentYChanged: if (contentHeight - contentY - height < height * 0.5) root.requestMore()
 
           delegate: CursorSurface {
             id: row

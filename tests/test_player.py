@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from types import SimpleNamespace as NS
 from ymd.player import Player, WAVE
-from tests.fakes import FakeApi, FakeMpv
+from tests.fakes import FakeApi, FakeMpv, track
 
 
 def make(download=None, **kw):
@@ -517,3 +517,70 @@ def test_trim_drops_stale_part_and_counts_fresh(tmp_path):
     (tmp_path / "c.mp3").write_bytes(b"x" * 10)
     diskcache.trim(tmp_path, limit=20)
     assert not old.exists() and not (tmp_path / "c.mp3").exists() and (tmp_path / "b.part").exists()
+
+
+# --- paginated sources ---
+
+
+async def test_likes_first_page_then_more():
+    p, api, mpv, n = make(likes=50)
+    await p.start_likes()
+    assert len(api.tracks_calls) == 1 and len(api.tracks_calls[0]) == 20 and len(p.queue) == 20
+    assert p.state()["has_more"] is True and p.state()["loading"] is False
+    await p.more(); await p.more()
+    assert len(p.queue) == 50 and p.state()["has_more"] is False
+    assert [len(c) for c in api.tracks_calls] == [20, 20, 10]
+    await p.more()
+    assert len(api.tracks_calls) == 3
+
+
+async def test_source_switch_notifies_before_fetch():
+    p, api, mpv, n = make(likes=50)
+    await p.start_likes()
+    seen = []
+    orig = api.tracks
+    async def spy(ids):
+        seen.append((len(n), p.state()["loading"], list(p.queue))); return await orig(ids)
+    api.tracks = spy
+    p.likes_page1 = None
+    before = len(n)
+    await p.start_likes()
+    assert seen[0][0] > before and seen[0][1] is True and seen[0][2] == []
+
+
+async def test_back_to_likes_reuses_first_page():
+    p, api, mpv, _ = make(likes=50)
+    await p.start_likes(); await p.start_wave(None)
+    api.tracks_calls.clear()
+    await p.start_likes()
+    assert api.tracks_calls == [] and len(p.queue) == 20
+
+
+async def test_auto_advance_loads_next_page():
+    p, api, mpv, _ = make(likes=50)
+    await p.start_likes(); await p.play(19); await p.settle()
+    assert len(p.queue) == 40 and p.loaded == [18, 19, 20]
+
+
+async def test_like_updates_ids_and_offset():
+    p, api, mpv, _ = make(likes=50)
+    await p.start_likes(); await p.play(0); await p.settle()
+    off = p.like_off
+    api.liked_add = ["0"]
+    await p.like()
+    assert p.like_ids[0] == "0" or "0" not in p.like_ids   # was liked: removed
+    assert p.like_off == off - 1
+
+
+async def test_wave_more_and_search_more():
+    p, api, mpv, _ = make()
+    await p.start_wave(None)
+    assert p.state()["has_more"] is True
+    await p.more()
+    assert len(p.queue) == 10
+    s = NS(results=[NS(**vars(track(900 + i))) for i in range(2)], total=3)
+    p2, api2, _m, _n = make(search_tracks=s)
+    await p2.search("x")
+    assert p2.state()["has_more"] is True
+    await p2.more()
+    assert len(p2.results) == 4 and api2.searched[-1] == ("x", "track", 1)

@@ -45,6 +45,7 @@ async def test_unauthorized_drops_token(tmp_path):
     await d.boot()
     async def boom(*a, **k): raise UnauthorizedError("401")
     api.users_likes_tracks = boom
+    d.player.like_ids_at = None   # ids older than 5 minutes are refetched
     await d.handle('{"cmd":"playlist"}')
     assert d.state()["auth"] == "none" and auth.load_token(tmp_path / "token") is None
 
