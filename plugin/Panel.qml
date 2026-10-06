@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Effects
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
@@ -26,13 +25,16 @@ Panel {
   readonly property bool hasTrack: root.loggedIn && !!root.music.track
   readonly property real listSpace: modal.height * 0.55   // the most the list may take
   readonly property var wave: Model.waveView(root.music)  // the My Wave screen: "playing" / "idle", null elsewhere
-  readonly property var controls: root.wave ? Model.waveControls(root.music) : Model.HEAD
+  readonly property var controls: Model.controlRow(root.music)
+  readonly property string page: root.wave || (root.loggedIn ? "list" : "")
+  readonly property string mood: Model.shownMood(root.music, root.pendingMood)
 
-  property int cur: -1
-  property bool btnFocus: false
-  property int head: -1           // cursor on root.controls (header buttons, or the wave screen's)
-  property int srcCur: -1         // cursor on the wave screen's source row (Model.SOURCE_ROW)
+  // The keyboard cursor (Model.cursorRows: tabs, mood, seek, controls, list); the mouse moves it too.
+  property string row: ""
+  property int col: 0             // the item in the row; on a list row 1 is its wave button
+  property int cur: -1            // the list row under the cursor
   property bool cursorPending: false  // just opened: the cursor goes to play/pause with the first state line
+  property string pendingMood: ""     // stepped to, sent Model.MOOD_DELAY after the last step
   property int askedAt: -1        // list length at the last "more" request
   property string sourceSig: ""
   property int seenIndex: -1
@@ -45,6 +47,10 @@ Panel {
   implicitHeight: 0
 
   function send(name, args) { link.send(Model.cmd(name, args)) }
+
+  function cursor() { return { row: root.row, col: root.col, cur: root.cur } }
+  function setCursor(row, col, cur) { root.row = row; root.col = col || 0; root.cur = cur === undefined ? -1 : cur }
+  function placeCursor(c) { root.setCursor(c.row, c.col, c.cur) }
 
   function refreshRows() {
     var r = Model.rows(root.music, root.pendingIndex)
@@ -59,13 +65,13 @@ Panel {
     }
     if (root.pendingIndex >= 0 && root.music.index !== root.seenIndex) root.pendingIndex = -1   // ymd answered
     root.seenIndex = root.music.index
+    if (root.pendingMood === Model.shownMood(root.music, "")) root.pendingMood = ""   // ymd has it
     root.pos = Model.position(root.music, 0)   // 0 while the new file has no length yet
     root.posStamp = Date.now()
     refreshRows()
     if (root.cursorPending && root.music.running) {
       root.cursorPending = false
-      var c = Model.initialCursor(root.music)
-      root.srcCur = -1; root.btnFocus = false; root.head = c.head; root.cur = c.cur
+      root.placeCursor(Model.initialCursor(root.music))
     }
   }
   onPendingIndexChanged: refreshRows()
@@ -90,107 +96,87 @@ Panel {
   }
 
   function moveRow(step) {
-    root.btnFocus = false
-    if (root.wave) {   // two rows: the source row above, the buttons below
-      if (step < 0) { root.head = -1; if (root.srcCur < 0) root.srcCur = 0 }
-      else if (root.head < 0) { root.srcCur = -1; root.head = Math.floor(root.controls.length / 2) }
-      return
-    }
-    if (root.head >= 0) {
-      if (step > 0 && root.shown.length > 0) { root.head = -1; root.cur = 0; moveGate.reset(); list.positionViewAtIndex(0, ListView.Contain) }
-      return
-    }
-    var i = root.cur + step
-    if (i < 0) { if (root.hasTrack) { root.cur = -1; root.head = 1 } return }
-    if (root.shown.length === 0) return
-    root.cur = Math.min(root.shown.length - 1, i)
+    root.cursorPending = false
+    root.placeCursor(Model.moveCursor(root.music, root.cursor(), step, root.pendingMood))
+    if (root.row !== "list") return
     if (root.cur >= root.shown.length - 1) root.requestMore()
     moveGate.reset()
     list.positionViewAtIndex(root.cur, ListView.Contain)
   }
 
   function side(dx, event) {
-    if ((event.modifiers & Qt.ShiftModifier) && root.hasTrack) { root.seekTo(root.pos + dx * 10); return }
-    if (root.srcCur >= 0) { root.srcCur = Math.max(0, Math.min(Model.SOURCE_ROW.length - 1, root.srcCur + dx)); return }
-    if (root.head >= 0) { root.head = Math.max(0, Math.min(root.controls.length - 1, root.head + dx)); return }
-    if (root.cur >= 0) { root.btnFocus = dx > 0; return }
-    event.accepted = false
+    var r = Model.sideCursor(root.music, root.cursor(), dx, !!(event.modifiers & Qt.ShiftModifier), root.pendingMood)
+    if (!r) { event.accepted = false; return }
+    if (r.seek) { root.seekTo(root.pos + r.seek); return }
+    root.col = r.col
+    if (r.tab) root.pickTab(r.tab)
+    if (r.mood) root.pickMood(r.mood)
   }
 
   function enter(event) {
-    var inList = root.cur >= 0 && root.cur < root.shown.length
-    if (root.srcCur >= 0) root.pickSource(Model.SOURCE_ROW[root.srcCur])
-    else if (root.head >= 0) root.activate(root.controls[root.head])
-    else if (inList && root.btnFocus) root.waveFrom(root.cur)
-    else if (inList) root.playRow(root.cur)
+    if (root.row === "tabs") root.pickTab(Model.TABS[root.col])
+    else if (root.row === "mood") root.pickMood(root.music.moods[root.col])
+    else if (root.row === "controls") root.activate(root.controls[root.col])
+    else if (root.row === "list" && root.col === 1) root.waveFrom(root.cur)
+    else if (root.row === "list") root.playRow(root.cur)
     else event.accepted = false
   }
 
   function activate(name) { if (name && Model.controlEnabled(name, root.music)) link.send(Model.controlCmd(name)) }
 
-  function pickSource(v) {
-    if (v === "mood") moodBox.open()
-    else if (v === "likes") root.send("playlist")
+  // A tab shows its list (the search results give way); the one already shown stays as it is.
+  function pickTab(v) {
+    if (field.text !== "") field.text = ""
+    if (v === root.music.source.type) return
+    if (v === "likes") root.send("playlist")
     else root.send("wave", { mood: Model.waveMood(root.music) })
+  }
+
+  // A mood shows as picked at once; ymd gets it once stepping stops (a playing wave restarts once).
+  function pickMood(m) {
+    if (!m || m === root.mood) return
+    root.pendingMood = m
+    moodDelay.restart()
   }
 
   function playRow(i) {
     if (i < 0 || i >= root.shown.length) return
     if (Model.searching(root.music)) { root.send("play-search", { index: i }); field.text = "" }
     else { root.send("play", { index: i }); root.pendingIndex = i; pendingClear.restart() }
-    root.cur = -1; root.btnFocus = false
+    root.setCursor("", 0)
   }
 
   function waveFrom(i) {
     if (i < 0 || i >= root.shown.length) return
     root.send("wave-track", { id: root.shown[i].id })
     field.text = ""
-    root.cur = -1; root.btnFocus = false
+    root.setCursor("", 0)
   }
 
+  // The rows changed under the cursor (another tab, the wave started or stopped, the track went away).
+  function fixCursor() { root.placeCursor(Model.screenCursor(root.music, root.cursor())) }
+
   onShownChanged: {
-    if (root.shown.length === 0) { root.cur = -1; root.btnFocus = false }
-    else if (root.cur >= root.shown.length) root.cur = root.shown.length - 1
-    if (root.cur >= 0) Qt.callLater(function() { list.positionViewAtIndex(root.cur, ListView.Contain) })
+    if (root.row !== "list") return
+    if (root.shown.length === 0) { root.fixCursor(); return }
+    if (root.cur >= root.shown.length) root.cur = root.shown.length - 1
+    Qt.callLater(function() { list.positionViewAtIndex(root.cur, ListView.Contain) })
   }
-  onHasTrackChanged: if (!root.hasTrack) root.head = -1
-  onWaveChanged: {   // another screen or view: the cursor stays on the buttons, if it was there
-    var n = Model.waveControls(root.music).length
-    root.head = root.head >= 0 && n > 0 ? Math.floor(n / 2) : -1
-    if (root.wave) root.cur = -1
-    else root.srcCur = -1
+  onHasTrackChanged: root.fixCursor()
+  onPageChanged: {
+    root.fixCursor()
+    if (!root.wave) { root.pendingMood = ""; moodDelay.stop() }
   }
   onLoggedInChanged: Qt.callLater(root.focusInput)
 
   onOpenedChanged: {
     if (opened) {
-      cur = -1; head = -1; srcCur = -1; btnFocus = false
+      root.setCursor("", 0)
       cursorPending = true
       moveGate.reset()
       Qt.callLater(function() { if (list.contentHeight < root.listSpace) root.requestMore() })
       Qt.callLater(root.focusInput)
     }
-  }
-
-  // A header / wave screen button by name (Model.control): enabled only when it has something to act on.
-  component Control: Button {
-    id: control
-    property string name
-    readonly property int at: root.controls.indexOf(name)
-    readonly property var look: Model.control(name, root.music)
-    iconText: look.icon
-    iconSize: Style.font.subtitle * 1.5
-    horizontalPadding: Style.space(5)
-    verticalPadding: Style.space(2)
-    width: Math.max(implicitWidth, implicitHeight)
-    height: width
-    tooltipText: root.tr(look.tip)
-    hasCursor: root.head === at && at >= 0
-    enabled: Model.controlEnabled(name, root.music)
-    foreground: enabled ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.4)
-    fontFamily: root.bar.fontFamily
-    onClicked: root.activate(name)
-    onHovered: function(h) { if (h && control.at >= 0) { root.cur = -1; root.srcCur = -1; root.head = control.at } }
   }
 
   // elapsed · slider · total; dimmed while disabled (no audible track)
@@ -230,39 +216,6 @@ Panel {
     }
   }
 
-  // A cover image, with rounded corners when radius > 0. A new url shows once it has loaded:
-  // the previous picture stays until then, so a track change never blanks it.
-  component Cover: Item {
-    id: coverItem
-    property string url: ""
-    property real radius: 0
-    property string shown: ""
-    readonly property bool ready: pic.status === Image.Ready
-    onUrlChanged: if (!url) shown = ""
-    layer.enabled: radius > 0
-    layer.effect: MultiEffect { maskEnabled: true; maskSource: coverMask; maskThresholdMin: 0.5; maskSpreadAtMin: 1.0 }
-    Image {
-      id: pic
-      anchors.fill: parent
-      source: coverItem.shown
-      fillMode: Image.PreserveAspectCrop
-      asynchronous: true
-    }
-    Image {   // loads the new url out of sight; the pixmap cache hands it to pic at once
-      visible: false
-      source: coverItem.url
-      asynchronous: true
-      onStatusChanged: if (status === Image.Ready || status === Image.Error) coverItem.shown = coverItem.url
-    }
-    Item {
-      id: coverMask
-      anchors.fill: parent
-      visible: false
-      layer.enabled: true
-      Rectangle { anchors.fill: parent; radius: coverItem.radius }
-    }
-  }
-
   PointerMoveGate { id: moveGate; referenceItem: card }
   ListModel { id: rowsModel }
   Link { id: link; wanted: root.opened }
@@ -274,6 +227,16 @@ Panel {
     repeat: true
     running: root.opened && root.hasTrack && root.music.playing
     onTriggered: root.pos = Model.position(root.music, Date.now() - root.posStamp)
+  }
+
+  Timer {
+    id: moodDelay
+    interval: Model.MOOD_DELAY
+    onTriggered: {
+      var m = Model.moodToSend(root.music, root.pendingMood)
+      if (m) root.send("wave", { mood: m })
+      else root.pendingMood = ""
+    }
   }
 
   // Search waits for a pause in typing.
@@ -306,58 +269,18 @@ Panel {
 
     BorderSurface {
       id: card
-      anchors.centerIn: parent
+      // The top stays where the tall list tab has it: the tabs row does not move when the compact
+      // My Wave screen comes or goes.
+      readonly property real listHeight: tabsRow.implicitHeight + hero.implicitHeight + headSeek.implicitHeight
+          + sep.implicitHeight + root.listSpace + column.spacing * 4 + card.contentTopInset + card.contentBottomInset
+      anchors.horizontalCenter: parent.horizontalCenter
+      y: Math.max(Style.space(20), Math.round((modal.height - listHeight) / 2))
       width: Math.min(Style.space(520), modal.width - Style.space(80))
       height: Math.min(column.implicitHeight + card.contentTopInset + card.contentBottomInset, modal.height * 0.85)
       color: Color.popups.background
       borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
       padding: Style.spacing.panelPadding
       radius: Style.cornerRadius
-
-      // My Wave while it plays: the track's cover, blurred and darkened, behind the whole card
-      // (the one picture-as-colour exception to rules.md §9).
-      Loader {
-        anchors.fill: parent
-        anchors.topMargin: card.borderTop
-        anchors.rightMargin: card.borderRight
-        anchors.bottomMargin: card.borderBottom
-        anchors.leftMargin: card.borderLeft
-        active: root.wave === "playing" && !!(root.music.track && root.music.track.cover)
-        sourceComponent: Item {
-          Cover {
-            id: blurSource
-            anchors.fill: parent
-            url: root.music.track ? root.music.track.cover : ""
-            visible: false
-          }
-          MultiEffect {
-            anchors.fill: parent
-            source: blurSource
-            visible: blurSource.ready
-            autoPaddingEnabled: false
-            blurEnabled: true
-            blur: 1.0
-            blurMax: 64
-            maskEnabled: true
-            maskSource: blurMask
-            maskThresholdMin: 0.5
-            maskSpreadAtMin: 1.0
-          }
-          Rectangle {   // darkened toward the theme's background, so the text stays readable
-            anchors.fill: parent
-            visible: blurSource.ready
-            radius: blurMask.children[0].radius
-            color: Color.menu.scrim
-          }
-          Item {
-            id: blurMask
-            anchors.fill: parent
-            visible: false
-            layer.enabled: true
-            Rectangle { anchors.fill: parent; radius: Math.max(0, card.radius - card.borderLeft) }
-          }
-        }
-      }
 
       MouseArea { anchors.fill: parent }
 
@@ -369,6 +292,58 @@ Panel {
         anchors.bottomMargin: card.contentBottomInset
         anchors.leftMargin: card.contentLeftInset
         spacing: Style.space(14)
+
+        // Wave / Liked, the search at the right: the first cursor row on every tab.
+        Words {
+          id: tabsRow
+          visible: root.loggedIn
+          width: parent.width
+          panel: root
+          rowName: "tabs"
+          options: [{ value: "wave", label: root.tr("Wave") }, { value: "likes", label: root.tr("Liked") }]
+          value: root.music.source.type
+          onPicked: function(v) { root.pickTab(v) }
+
+          // Search: borderless, a quiet hint at the right; always holds the keyboard. Typing shows the results.
+          TextField {
+            id: field
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(10)
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - tabsRow.wordsWidth - Style.space(24)
+            horizontalAlignment: TextInput.AlignRight
+            leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+            background: null
+            placeholderText: root.tr("Search…")
+            placeholderTextColor: Util.alpha(root.bar.foreground, 0.4)
+            foreground: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.body
+            cursorDelegate: Item {}
+            onTextEdited: { root.setCursor("", 0); root.cursorPending = false; searchDelay.restart() }
+            onTextChanged: if (text === "") { searchDelay.stop(); root.send("search", { text: "" }) }
+            Keys.onUpPressed: root.moveRow(-1)
+            Keys.onDownPressed: root.moveRow(1)
+            Keys.onLeftPressed: function(event) { root.side(-1, event) }
+            Keys.onRightPressed: function(event) { root.side(1, event) }
+            Keys.onReturnPressed: function(event) { root.enter(event) }
+            Keys.onEnterPressed: function(event) { root.enter(event) }
+            Keys.onSpacePressed: function(event) {
+              if (text === "") root.send("toggle")
+              else event.accepted = false
+            }
+            Keys.onEscapePressed: {
+              if (text === "") { root.close(); return }
+              text = ""
+              root.placeCursor(Model.initialCursor(root.music))
+            }
+            Keys.onPressed: function(event) {
+              if (!(event.modifiers & Qt.ControlModifier) || !root.hasTrack) return
+              if (event.key === Qt.Key_L) { root.send("like"); event.accepted = true }
+              else if (event.key === Qt.Key_D) { root.send("dislike"); event.accepted = true }
+            }
+          }
+        }
 
         PanelHero {
           id: hero
@@ -400,9 +375,10 @@ Panel {
             spacing: Style.space(10)
             Repeater {
               model: Model.HEAD
-              Control {
+              ControlButton {
                 required property string modelData
                 anchors.verticalCenter: parent.verticalCenter
+                panel: root
                 name: modelData
               }
             }
@@ -483,202 +459,10 @@ Panel {
           }
         }
 
-        // Search: borderless, like todo; always holds the keyboard.
-        TextField {
-          id: field
-          visible: root.loggedIn
-          width: parent.width
-          height: Math.max(Style.space(34), Style.font.title + Style.spacing.controlPaddingY * 2)
-          leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
-          background: null
-          placeholderText: root.tr("Search…")
-          placeholderTextColor: Util.alpha(root.bar.foreground, 0.58)
-          foreground: root.bar.foreground
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.heading
-          cursorDelegate: Item {}
-          onTextEdited: { root.cur = -1; root.head = -1; root.srcCur = -1; root.cursorPending = false; searchDelay.restart() }
-          onTextChanged: if (text === "") { searchDelay.stop(); root.send("search", { text: "" }) }
-          Keys.onUpPressed: root.moveRow(-1)
-          Keys.onDownPressed: root.moveRow(1)
-          Keys.onLeftPressed: function(event) { root.side(-1, event) }
-          Keys.onRightPressed: function(event) { root.side(1, event) }
-          Keys.onReturnPressed: function(event) { root.enter(event) }
-          Keys.onEnterPressed: function(event) { root.enter(event) }
-          Keys.onSpacePressed: function(event) {
-            if (text === "") root.send("toggle")
-            else event.accepted = false
-          }
-          Keys.onEscapePressed: { if (text !== "") text = ""; else root.close() }
-          Keys.onPressed: function(event) {
-            if (!(event.modifiers & Qt.ControlModifier) || !root.hasTrack) return
-            if (event.key === Qt.Key_L) { root.send("like"); event.accepted = true }
-            else if (event.key === Qt.Key_D) { root.send("dislike"); event.accepted = true }
-          }
-        }
-
-        // Source: Wave / Liked + mood (only for My Wave); hidden while searching. Centered on the wave screen.
-        Row {
-          visible: root.loggedIn && !Model.searching(root.music)
-          x: root.wave ? (parent.width - width) / 2 : 0
-          spacing: Style.space(10)
-          ButtonGroup {
-            options: [{ value: "wave", label: root.tr("Wave") }, { value: "likes", label: root.tr("Liked") }]
-            value: root.music.source.type === "wave" || root.music.source.type === "likes" ? root.music.source.type : ""
-            focusable: false
-            cursorIndex: root.srcCur < 2 ? root.srcCur : -1
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
-            onChanged: function(v) { root.pickSource(v) }
-          }
-          Dropdown {
-            id: moodBox
-            visible: root.music.source.type === "wave"
-            width: Style.spacing.dropdownWidth
-            showLabel: false
-            hasCursor: root.srcCur === 2
-            options: Model.moodOptions(root.music, root.tr)
-            value: root.music.source.mood || "all"
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
-            onChanged: function(v) { if (v !== (root.music.source.mood || "all")) root.send("wave", { mood: v }) }
-            onPopupOpenChanged: if (!popupOpen) Qt.callLater(root.focusInput)   // the field holds the keys again
-          }
-        }
-
-        // My Wave: the cover and the player under it; before the wave starts, a placeholder and ▶.
-        Item {
-          id: waveBody
+        Wave {
           visible: !!root.wave
           width: parent.width
-          // as tall as the header and list it stands for: the window keeps its size across tabs
-          height: Math.max(waveColumn.implicitHeight,
-                           hero.implicitHeight + headSeek.implicitHeight + sep.implicitHeight + root.listSpace + column.spacing * 3)
-
-          Column {
-            id: waveColumn
-            anchors.verticalCenter: parent.verticalCenter
-            width: parent.width
-            spacing: Style.space(10)
-
-            Item {
-              anchors.horizontalCenter: parent.horizontalCenter
-              width: Math.round(waveBody.width * 0.64)
-              height: width
-              Cover {
-                id: bigCover
-                anchors.fill: parent
-                visible: root.wave === "playing"
-                radius: Style.cornerRadius
-                url: root.music.track ? (root.music.track.cover_big || root.music.track.cover) : ""
-              }
-              Text {
-                anchors.centerIn: parent
-                visible: root.wave === "playing" && !bigCover.ready
-                text: Model.ICONS.myWave
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.display * 3
-              }
-              Rectangle {
-                anchors.fill: parent
-                visible: root.wave === "idle"
-                radius: Style.cornerRadius
-                color: "transparent"
-                border.width: 1
-                border.color: Util.alpha(root.bar.foreground, 0.25)
-                Column {
-                  anchors.centerIn: parent
-                  width: parent.width - Style.space(24)
-                  spacing: Style.space(10)
-                  Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: Model.ICONS.myWave
-                    color: root.bar.foreground
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.display * 3
-                  }
-                  Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    textFormat: Text.PlainText
-                    text: root.tr("My Wave")
-                    color: root.bar.foreground
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.title
-                    font.bold: true
-                  }
-                  Text {
-                    width: parent.width
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.Wrap
-                    textFormat: Text.PlainText
-                    text: root.music.error ? Model.subtitle(root.music, root.tr) : Model.moodLabel(root.music.source.mood, root.tr)
-                    color: Qt.darker(root.bar.foreground, 1.4)
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.body
-                  }
-                }
-              }
-            }
-
-            // Title, artists and seek: kept (unseen) before the wave starts, so ▶ sits where ⏯ will be.
-            Item { width: 1; height: Style.space(4) }
-            Text {
-              width: parent.width
-              opacity: root.wave === "playing" ? 1 : 0
-              horizontalAlignment: Text.AlignHCenter
-              elide: Text.ElideRight
-              textFormat: Text.PlainText
-              text: root.music.track ? root.music.track.title : " "
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.heading
-              font.bold: true
-            }
-            Text {
-              width: parent.width
-              opacity: root.wave === "playing" ? 1 : 0
-              horizontalAlignment: Text.AlignHCenter
-              elide: Text.ElideRight
-              textFormat: Text.PlainText
-              text: root.music.error ? Model.subtitle(root.music, root.tr) : root.music.track ? root.music.track.artists : " "
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.body
-            }
-            SeekRow {
-              width: parent.width
-              opacity: root.wave === "playing" ? 1 : 0
-              enabled: root.wave === "playing" && root.hasTrack
-            }
-
-            // dislike at the left edge, like at the right, prev · play/pause · next between them
-            Item {
-              width: parent.width
-              height: bigToggle.height
-              Control {
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-                visible: root.wave === "playing"
-                name: "dislike"
-                iconSize: Style.font.display
-              }
-              Row {
-                anchors.centerIn: parent
-                spacing: Style.space(26)
-                Control { anchors.verticalCenter: parent.verticalCenter; visible: root.wave === "playing"; name: "prev"; iconSize: Style.font.display }
-                Control { id: bigToggle; anchors.verticalCenter: parent.verticalCenter; name: root.wave === "idle" ? "start" : "toggle"; iconSize: Style.font.display * 1.75 }
-                Control { anchors.verticalCenter: parent.verticalCenter; visible: root.wave === "playing"; name: "next"; iconSize: Style.font.display }
-              }
-              Control {
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                visible: root.wave === "playing"
-                name: "like"
-                iconSize: Style.font.display
-              }
-            }
-          }
+          panel: root
         }
 
         Text {
@@ -739,13 +523,13 @@ Panel {
           onContentHeightChanged: if (contentHeight < root.listSpace) root.requestMore()   // list too short to scroll
 
           delegate: CursorSurface {
-            id: row
+            id: entry
             required property var model
             required property int index
             width: list.width
             implicitHeight: Math.max(Style.space(50), texts.implicitHeight + Style.spacing.rowPaddingX * 2)
             foreground: root.bar.foreground
-            hasCursor: root.cur === index && !root.btnFocus
+            hasCursor: root.row === "list" && root.cur === index && root.col === 0
 
             MouseArea {
               id: rowArea
@@ -753,9 +537,9 @@ Panel {
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
               onPositionChanged: function(mouse) {
-                if (moveGate.moved(rowArea, mouse)) { root.head = -1; root.cur = row.index; root.btnFocus = false }
+                if (moveGate.moved(rowArea, mouse)) root.setCursor("list", 0, entry.index)
               }
-              onClicked: root.playRow(row.index)
+              onClicked: root.playRow(entry.index)
             }
 
             Text {
@@ -764,7 +548,7 @@ Panel {
               anchors.leftMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               width: Style.space(20)
-              text: row.model.current ? Model.ICONS.play : ""
+              text: entry.model.current ? Model.ICONS.play : ""
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.body
@@ -781,17 +565,17 @@ Panel {
                 width: parent.width
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
-                text: row.model.title
+                text: entry.model.title
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.body
-                font.bold: row.model.current
+                font.bold: entry.model.current
               }
               Text {
                 width: parent.width
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
-                text: row.model.artists
+                text: entry.model.artists
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -810,10 +594,11 @@ Panel {
               width: Math.max(implicitWidth, implicitHeight)
               height: width
               tooltipText: root.tr("Wave by this track")
-              hasCursor: root.cur === row.index && root.btnFocus
-              foreground: root.cur === row.index ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.4)
+              hasCursor: root.row === "list" && root.cur === entry.index && root.col === 1
+              foreground: root.row === "list" && root.cur === entry.index ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.4)
               fontFamily: root.bar.fontFamily
-              onClicked: root.waveFrom(row.index)
+              onClicked: root.waveFrom(entry.index)
+              onHovered: function(h) { if (h) root.setCursor("list", 1, entry.index) }
             }
           }
         }
