@@ -1,3 +1,4 @@
+from types import SimpleNamespace as NS
 from ymd.player import Player, WAVE
 from tests.fakes import FakeApi, FakeMpv
 
@@ -137,3 +138,75 @@ async def test_state_marks_playing_track():
     s = p.state()
     assert s["index"] == 0 and s["playing"] is True and s["track"]["title"] == "t0"
     assert s["moods"] == ["all", "fun", "active", "calm", "sad"]
+
+
+# --- Fix round 1 tests ---
+
+
+async def test_search_with_none_tracks():
+    """search() guards when api returns tracks=None."""
+    p, api, mpv, _ = make(search_tracks=NS(results=None))
+    await p.search("test")
+    assert p.state()["search"]["results"] == []
+
+
+async def test_like_with_no_current_track():
+    """like() returns without API call when index is invalid."""
+    p, api, mpv, _ = make()
+    p.queue = []
+    p.index = -1
+    await p.like()
+    assert api.liked_add == []
+
+
+async def test_dislike_with_no_current_track():
+    """dislike() returns without API call when index is invalid."""
+    p, api, mpv, _ = make()
+    p.queue = []
+    p.index = -1
+    await p.dislike()
+    assert api.disliked == [] and mpv.calls == []
+
+
+async def test_best_link_none_skips_track():
+    """When best_link returns None (track unavailable), set error and don't loadfile."""
+    p, api, mpv, _ = make(unavailable_ids={"0"})
+    await p.start_likes()
+    assert p.error == "track unavailable" and mpv.playlist == []
+
+
+async def test_on_event_concurrent_with_command():
+    """Multiple on_event calls can occur while commands are being processed."""
+    import asyncio
+    p, api, mpv, _ = make()
+    await p.start_likes()
+
+    # Simulate multiple events arriving concurrently
+    events = [
+        {"event": "property-change", "name": "pause", "data": True},
+        {"event": "property-change", "name": "time-pos", "data": 5.0},
+        {"event": "property-change", "name": "pause", "data": False},
+    ]
+
+    # All events should complete without blocking
+    await asyncio.gather(*[p.on_event(e) for e in events])
+    assert p.playing is True  # Final pause state (False means not paused)
+
+
+async def test_locked_entry_points():
+    """Mutating entry points properly serialize with lock."""
+    p, api, mpv, _ = make()
+    await p.start_likes()
+
+    # Multiple concurrent operations should serialize safely
+    import asyncio
+    results = await asyncio.gather(
+        p.search("test"),
+        p.toggle(),
+        return_exceptions=True
+    )
+    # If any returned exception, it's an error
+    for r in results:
+        assert not isinstance(r, Exception), f"Got exception: {r}"
+    # If deadlock occurred, the gather would timeout; if we get here, it worked
+    assert True

@@ -23,8 +23,9 @@ class MpvError(Exception):
 class Mpv:
     def __init__(self, sock_path, on_event):
         self.sock_path, self.on_event = sock_path, on_event
-        self.proc = self.reader = self.writer = self.task = None
+        self.proc = self.reader = self.writer = self.task = self.dispatcher = None
         self.pending, self.next_id = {}, 0
+        self.event_queue = asyncio.Queue()
 
     async def start(self):
         if self.writer:
@@ -35,7 +36,14 @@ class Mpv:
                 await self.task
             except asyncio.CancelledError:
                 pass
-        self.task = None  # Reset task before starting new mpv
+        if self.dispatcher and not self.dispatcher.done():
+            self.dispatcher.cancel()
+            try:
+                await self.dispatcher
+            except asyncio.CancelledError:
+                pass
+        self.task = None
+        self.dispatcher = None
         if os.path.exists(self.sock_path):
             os.unlink(self.sock_path)
         args = ["mpv", "--idle=yes", "--no-video", "--no-config", "--no-terminal",
@@ -48,7 +56,9 @@ class Mpv:
                 break
             await asyncio.sleep(0.05)
         self.reader, self.writer = await asyncio.open_unix_connection(self.sock_path)
+        self.event_queue = asyncio.Queue()
         self.task = asyncio.create_task(self._read())
+        self.dispatcher = asyncio.create_task(self._dispatch_events())
         for n, name in enumerate(OBSERVED, 1):
             await self.command("observe_property", n, name)
 
@@ -73,7 +83,7 @@ class Mpv:
                 try:
                     msg = json.loads(line)
                     if "event" in msg:
-                        await self.on_event(msg)
+                        await self.event_queue.put(msg)
                     elif (fut := self.pending.pop(msg.get("request_id"), None)) and not fut.done():
                         if msg.get("error") == "success":
                             fut.set_result(msg.get("data"))
@@ -86,6 +96,18 @@ class Mpv:
                 if not fut.done():
                     fut.set_exception(MpvError("mpv exited"))
             self.pending.clear()
+
+    async def _dispatch_events(self):
+        """Dispatch events from the queue to on_event, catching exceptions."""
+        try:
+            while True:
+                msg = await self.event_queue.get()
+                try:
+                    await self.on_event(msg)
+                except Exception as e:
+                    logger.exception(f"Error in on_event: {e}")
+        except asyncio.CancelledError:
+            pass
 
     async def run_forever(self, on_restart):
         """Restart mpv whenever it dies; on_restart re-loads the current track.

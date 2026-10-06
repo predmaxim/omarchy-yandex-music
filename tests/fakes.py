@@ -8,8 +8,9 @@ def track(i, title=None):
 
 class FakeMpv:
     """Records commands and mirrors loadfile/remove on a fake playlist."""
-    def __init__(self):
+    def __init__(self, on_load=None):
         self.calls, self.playlist = [], []
+        self.on_load = on_load
 
     async def command(self, *args):
         self.calls.append(args)
@@ -18,6 +19,8 @@ class FakeMpv:
             if mode == "replace": self.playlist = [url]
             elif mode == "append": self.playlist.append(url)
             elif mode == "insert-at": self.playlist.insert(args[3], url)
+            if self.on_load:
+                await self.on_load()
         elif args[0] == "playlist-remove":
             self.playlist.pop(args[1])
         elif args[0] == "stop":
@@ -25,11 +28,13 @@ class FakeMpv:
 
 
 class FakeApi:
-    def __init__(self, likes=5, wave_batches=None):
+    def __init__(self, likes=5, wave_batches=None, search_tracks=None, unavailable_ids=None):
         self.likes = [track(i) for i in range(likes)]
         self.wave_batches = wave_batches or [[track(100 + i) for i in range(5)], [track(200 + i) for i in range(5)]]
         self.feedback, self.settings, self.liked_add, self.disliked, self.searched = [], [], [], [], []
         self.rotor_calls = []
+        self.search_tracks = search_tracks or NS(results=[track(900), track(901)])
+        self.unavailable_ids = unavailable_ids or set()
 
     async def users_likes_tracks(self):
         async def fetch(): return self.likes
@@ -47,6 +52,8 @@ class FakeApi:
         self.feedback.append((station, type_, kw.get("track_id"))); return True
 
     async def tracks_download_info(self, track_id, get_direct_links=False):
+        if track_id in self.unavailable_ids:
+            return [NS(codec="mp3", bitrate_in_kbps=320, preview=True, direct_link=f"preview{track_id}")]
         return [NS(codec="mp3", bitrate_in_kbps=320, preview=False, direct_link=f"url{track_id}")]
 
     async def users_likes_tracks_add(self, track_id): self.liked_add.append(track_id); return True
@@ -55,4 +62,4 @@ class FakeApi:
 
     async def search(self, text, type_="all"):
         self.searched.append((text, type_))
-        return NS(tracks=NS(results=[track(900), track(901)]))
+        return NS(tracks=self.search_tracks)
