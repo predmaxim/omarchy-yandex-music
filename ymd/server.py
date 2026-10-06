@@ -12,6 +12,7 @@ import subprocess
 from yandex_music.exceptions import UnauthorizedError, YandexMusicError
 
 from . import auth
+from .mpv import MpvError
 
 log = logging.getLogger("ymd")
 
@@ -22,19 +23,44 @@ class Daemon:
         self.token_path, self.qr_path = token_path, qr_path
         self.player, self.auth, self.login_info = None, "none", None
         self.subscribers, self.login_task, self.error = set(), None, None
+        self.retry_task, self.retry_s = None, 10
 
     async def boot(self):
+        self._cancel_retry()
+        if not await self._try_boot():
+            self.retry_task = asyncio.create_task(self._retry())
+
+    def _cancel_retry(self):
+        if self.retry_task and self.retry_task is not asyncio.current_task():
+            self.retry_task.cancel()
+        self.retry_task = None
+
+    async def _retry(self):
+        while True:
+            await asyncio.sleep(self.retry_s)
+            if await self._try_boot():
+                self.broadcast()
+                return
+
+    async def _try_boot(self):
+        """True when done (booted, no token, or 401); False when worth retrying."""
         token = auth.load_token(self.token_path)
         if not token:
             self.auth = "none"
-            return
-        self.player = self.player_factory(await self.make_client(token))
-        self.player.notify = self.broadcast
-        self.auth = "ok"
+            return True
         try:
+            self.player = self.player_factory(await self.make_client(token))
+            self.player.notify = self.broadcast
             await self.player.load_likes()
         except UnauthorizedError:
-            self._logged_out()
+            await self._logged_out()
+            return True
+        except (YandexMusicError, OSError) as e:
+            log.warning("boot failed, will retry: %s", e)
+            self.player, self.auth, self.error = None, "none", str(e)
+            return False
+        self.auth, self.error = "ok", None
+        return True
 
     def state(self):
         base = self.player.state() if self.player else {
@@ -50,7 +76,13 @@ class Daemon:
             except Exception:
                 self.subscribers.discard(w)
 
-    def _logged_out(self):
+    async def _logged_out(self):
+        self._cancel_retry()
+        if self.player:
+            try:
+                await self.player.mpv.command("stop")
+            except Exception as e:
+                log.warning("stop on logout failed: %s", e)
         auth.drop_token(self.token_path)
         self.auth, self.player = "none", None
 
@@ -64,6 +96,7 @@ class Daemon:
             self.login_info = {"url": url, "code": code, "qr": qr}
             self.broadcast()
         try:
+            self._cancel_retry()
             self.auth = "pending"; self.broadcast()
             token = await auth.login(await self.make_client(None), shown)
             auth.save_token(token, self.token_path)
@@ -84,8 +117,7 @@ class Daemon:
                     self.login_task = asyncio.create_task(self._login())
                 return
             if cmd == "logout":
-                if self.player: await self.player.stop()
-                self._logged_out()
+                await self._logged_out()
             elif not self.player:
                 self.error = "not logged in"
             else:
@@ -105,8 +137,8 @@ class Daemon:
                 else:
                     await actions[cmd]()
         except UnauthorizedError:
-            self._logged_out()
-        except (YandexMusicError, OSError) as e:
+            await self._logged_out()
+        except (YandexMusicError, OSError, MpvError) as e:
             log.warning("%s: %s", line.strip(), e)
             self.error = str(e)
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
@@ -116,13 +148,13 @@ class Daemon:
     async def serve(self, sock_path):
         async def client(reader, writer):
             try:
-                while line := await reader.readline():
+                while line := await reader.readline():  # ValueError: over-limit line
                     if line.strip() == b'{"cmd":"subscribe"}':
                         self.subscribers.add(writer)
                         writer.write((json.dumps(self.state(), ensure_ascii=False) + "\n").encode())
                         continue
-                    await self.handle(line.decode())
-            except ConnectionError:
+                    await self.handle(line.decode(errors="replace"))
+            except (ConnectionError, ValueError):  # ValueError: line over the stream limit
                 pass
             finally:
                 self.subscribers.discard(writer)

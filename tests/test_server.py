@@ -73,3 +73,59 @@ async def test_login_survives_qr_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "login", fake_login)
     await d._login()
     assert d.auth == "ok" and auth.load_token(tmp_path / "token") == "newtok"
+
+
+async def test_mpv_error_keeps_connection(tmp_path):
+    from ymd.mpv import MpvError
+    d, _ = daemon(tmp_path)
+    await d.boot()
+    async def boom(*a): raise MpvError("mpv not running")
+    d.player.mpv.command = boom
+    sock = str(tmp_path / "ymd.sock")
+    server = await d.serve(sock)
+    r, w = await asyncio.open_unix_connection(sock)
+    w.write(b'{"cmd":"subscribe"}\n'); await r.readline()
+    w.write(b'{"cmd":"next"}\n'); await w.drain()
+    assert "mpv" in json.loads(await asyncio.wait_for(r.readline(), 2))["error"]
+    w.write(b'{"cmd":"logout"}\n'); await w.drain()
+    assert json.loads(await asyncio.wait_for(r.readline(), 2))["auth"] == "none"
+    assert auth.load_token(tmp_path / "token") is None
+    w.close(); server.close()
+
+
+async def test_boot_unauthorized_drops_token(tmp_path):
+    d, _ = daemon(tmp_path)
+    async def make_client(tok): raise UnauthorizedError("401")
+    d.make_client = make_client
+    await d.boot()
+    assert d.auth == "none" and auth.load_token(tmp_path / "token") is None and d.retry_task is None
+
+
+async def test_boot_network_error_retries(tmp_path):
+    from yandex_music.exceptions import NetworkError
+    d, api = daemon(tmp_path)
+    d.retry_s = 0.01
+    fail = [True]
+    async def make_client(tok):
+        if fail[0]: raise NetworkError("down")
+        return api
+    d.make_client = make_client
+    await d.boot()
+    assert d.auth == "none" and d.error and auth.load_token(tmp_path / "token") == "tok"
+    fail[0] = False
+    await asyncio.wait_for(d.retry_task, 2)
+    assert d.auth == "ok" and d.error is None
+
+
+async def test_invalid_utf8_line_survives(tmp_path):
+    d, _ = daemon(tmp_path)
+    await d.boot()
+    sock = str(tmp_path / "ymd.sock")
+    server = await d.serve(sock)
+    r, w = await asyncio.open_unix_connection(sock)
+    w.write(b'{"cmd":"subscribe"}\n'); await r.readline()
+    w.write(b'\xff\xfe\n'); await w.drain()
+    assert json.loads(await asyncio.wait_for(r.readline(), 2))["error"] == "unknown command"
+    w.write(b'{"cmd":"playlist"}\n'); await w.drain()
+    assert json.loads(await asyncio.wait_for(r.readline(), 2))["source"]["type"] == "likes"
+    w.close(); server.close()
