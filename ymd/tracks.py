@@ -2,10 +2,10 @@
 
 
 def info(t) -> dict:
-    cover = f"https://{t.cover_uri.replace('%%', '200x200')}" if t.cover_uri else ""
+    cover = lambda size: f"https://{t.cover_uri.replace('%%', size)}" if t.cover_uri else ""
     return {"id": str(t.id), "fid": str(t.track_id), "title": t.title or "",
             "artists": ", ".join(t.artists_name()), "album": t.albums[0].title if t.albums else "",
-            "cover": cover}
+            "cover": cover("200x200"), "cover_big": cover("600x600")}  # header / My Wave screen
 
 
 def best_link(infos) -> str | None:

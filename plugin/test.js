@@ -3,7 +3,7 @@ const fs = require("fs")
 const assert = require("assert")
 const load = (file, names) =>
   new Function(fs.readFileSync(__dirname + "/" + file, "utf8").replace(".pragma library", "") + "; return { " + names + " }")()
-const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD, syncRows")
+const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD, syncRows, waveView, waveControls, controlCmd, control, waveMood, moodLabel, SOURCE_ROW")
 const I = load("I18n.js", "TABLES, translator")
 const ru = I.translator("ru")
 
@@ -30,7 +30,7 @@ assert.strictEqual(M.ICONS.playing, String.fromCodePoint(0xF040A))
 assert.strictEqual(M.ICONS.paused, String.fromCodePoint(0xF03E4))
 assert.strictEqual(M.ICONS.empty, String.fromCodePoint(0xF075A))
 // Header and row glyphs (MDI): checked against the font's glyph names
-const glyphs = { prev: 0xF04AE, next: 0xF04AD, play: 0xF040A, dislike: 0xF0512, like: 0xF02D5, liked: 0xF02D1, wave: 0xF0411 }
+const glyphs = { prev: 0xF04AE, next: 0xF04AD, play: 0xF040A, dislike: 0xF0512, like: 0xF02D5, liked: 0xF02D1, wave: 0xF0411, myWave: 0xF0388 }
 for (const k in glyphs) assert.strictEqual(M.ICONS[k], String.fromCodePoint(glyphs[k]), "ICONS." + k)
 const panel = fs.readFileSync(__dirname + "/Panel.qml", "utf8")
 assert.ok(!/\\u\{F[0-9A-F]{4}\}/i.test(panel), "Panel.qml: glyphs live in Model.ICONS")
@@ -104,6 +104,36 @@ assert.deepStrictEqual(M.rows(ss), [{ id: "9", title: "Орбит", artists: "С
 
 // Mood dropdown: ids from the state, labels translated, "all" first
 assert.deepStrictEqual(M.moodOptions(st, ru).map(o => o.label), ["Любое", "Весёлое", "Бодрое", "Спокойное", "Грустное"])
+
+// My Wave screen: "playing" while the wave is the play source, "idle" otherwise, null on other lists
+const wv = p => at(Object.assign({ play_source: { type: "wave", title: "", mood: "calm" } }, p))
+assert.strictEqual(M.waveView(wv()), "playing")
+assert.strictEqual(M.waveView(wv({ track: null })), "playing")
+assert.strictEqual(M.waveView(wv({ play_source: { type: "likes", title: "", mood: "" } })), "idle")
+assert.strictEqual(M.waveView(wv({ play_source: { type: "none", title: "", mood: "" }, track: null })), "idle")
+assert.strictEqual(M.waveView(wv({ source: { type: "likes", title: "", mood: "" } })), null)
+assert.strictEqual(M.waveView(wv({ search: { text: "x", results: [] } })), null)   // typing shows results
+assert.strictEqual(M.waveView(wv({ auth: "none" })), null)
+assert.strictEqual(M.waveView(M.OFFLINE), null)
+assert.deepStrictEqual(M.waveControls(wv()), ["dislike", "prev", "toggle", "next", "like"])
+assert.deepStrictEqual(M.waveControls(wv({ play_source: { type: "likes", title: "", mood: "" } })), ["start"])
+assert.deepStrictEqual(M.waveControls(at({ source: { type: "likes", title: "", mood: "" } })), [])
+assert.deepStrictEqual(M.SOURCE_ROW, ["wave", "likes", "mood"])
+// A control's command line, glyph and tooltip; ▶ on the idle screen plays the browsed wave from the top
+assert.deepStrictEqual(JSON.parse(M.controlCmd("start")), { cmd: "play", index: 0 })
+assert.deepStrictEqual(JSON.parse(M.controlCmd("dislike")), { cmd: "dislike" })
+assert.deepStrictEqual(M.control("toggle", st), { icon: M.ICONS.paused, tip: "Pause" })
+assert.deepStrictEqual(M.control("toggle", at({ playing: false })), { icon: M.ICONS.play, tip: "Play" })
+assert.deepStrictEqual(M.control("like", st), { icon: M.ICONS.liked, tip: "Like" })
+assert.deepStrictEqual(M.control("like", at({ track: null })), { icon: M.ICONS.like, tip: "Like" })
+assert.deepStrictEqual(M.control("start", st), { icon: M.ICONS.play, tip: "Play" })
+assert.deepStrictEqual(["prev", "next", "dislike"].map(n => M.control(n, st).icon), [M.ICONS.prev, M.ICONS.next, M.ICONS.dislike])
+// The Wave chip goes back to the wave that plays (or is browsed) instead of restarting it as "any"
+assert.strictEqual(M.waveMood(wv({ source: { type: "likes", title: "", mood: "" } })), "calm")
+assert.strictEqual(M.waveMood(at({ play_source: { type: "likes", title: "", mood: "" } })), "calm")   // browsed wave
+assert.strictEqual(M.waveMood(at({ source: { type: "likes", title: "", mood: "" }, play_source: { type: "likes", title: "", mood: "" } })), "all")
+assert.strictEqual(M.moodLabel("", ru), "Любое")
+assert.strictEqual(M.moodLabel("fun", ru), "Весёлое")
 
 // Every tr("…") has a Russian line
 for (const f of ["Panel.qml", "Indicator.qml", "Link.qml", "Model.js"]) {
