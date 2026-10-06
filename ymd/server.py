@@ -64,7 +64,7 @@ class Daemon:
 
     def state(self):
         base = self.player.state() if self.player else {
-            "source": {"type": "none", "title": "", "mood": ""}, "moods": [], "playing": False, "track": None,
+            "source": {"type": "none", "title": "", "mood": ""}, "play_source": {"type": "none", "title": "", "mood": ""}, "moods": [], "playing": False, "track": None,
             "queue": [], "index": -1, "position": 0.0, "duration": 0.0, "has_more": False, "loading": False, "search": {"text": "", "results": []}, "error": None}
         return dict(base, auth=self.auth, login=self.login_info, error=self.error or base["error"])
 
