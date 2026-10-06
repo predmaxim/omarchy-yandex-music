@@ -561,11 +561,11 @@ async def test_auto_advance_loads_next_page():
 async def test_like_updates_ids_and_offset():
     p, api, mpv, _ = make(likes=50)
     await p.start_likes(); await p.play(0); await p.settle()
-    off = p.like_off
+    off = p.feed.off
     api.liked_add = ["0"]
     await p.like()
     assert p.like_ids[0] == "1" and "0" not in p.like_ids   # was liked: removed
-    assert p.like_off == off - 1
+    assert p.feed.off == off - 1
 
 
 async def test_wave_more_and_search_more():
@@ -719,3 +719,53 @@ async def test_play_queue_keeps_its_mood_while_another_is_browsed():
     assert [s[1] for s in api.settings] == ["calm", "fun", "calm"]
     await p.start_wave("calm")
     assert p.queue is p.play_queue and p.state()["index"] == p.index
+
+
+# --- v4 ---
+
+
+async def test_station_with_every_track_unavailable_gives_up():
+    import asyncio
+    ids = {str(i) for i in [*range(100, 105), *range(200, 205)]}
+    p, api, mpv, _ = make(unavailable_ids=ids)
+    rotor = api.rotor_station_tracks
+    async def yielding(*a, **k):
+        await asyncio.sleep(0)                            # lets wait_for fire if the loop never ends
+        return await rotor(*a, **k)
+    api.rotor_station_tracks = yielding
+    await p.start_wave(None)
+    await asyncio.wait_for(p.play(0), 2)
+    assert p.error == "track unavailable" and not p.lock.locked() and mpv.playlist == []
+    assert len(api.rotor_calls) <= 5                      # one page of attempts, not an endless rotor
+
+
+async def test_eof_of_old_track_during_play_does_not_skip_new_one():
+    import asyncio
+    p, api, mpv, _ = make()
+    await likes(p)
+    gate, orig = asyncio.Event(), api.tracks_download_info
+    async def slow(tid, **k):
+        if tid == "3":
+            await gate.wait()
+        return await orig(tid, **k)
+    api.tracks_download_info = slow
+    play = asyncio.create_task(p.play(3))
+    await asyncio.sleep(0)
+    eof = asyncio.create_task(p.on_event({"event": "end-file", "reason": "eof"}))   # track 0 ended meanwhile
+    await asyncio.sleep(0)
+    gate.set()
+    await play; await eof; await p.settle()
+    assert p.now["id"] == "3" and p.index == 3
+
+
+async def test_more_on_shared_likes_feed_while_it_plays():
+    p, api, mpv, _ = make(likes=50)
+    await p.start_likes(); await p.play(0); await p.settle()
+    await p.more()                                        # the shown feed is the play queue: page 2
+    await p.play(19); await p.settle()
+    await p.on_event({"event": "end-file", "reason": "eof"})
+    await pos(p, 2)                                       # mpv went on to row 20, from page 2
+    await p.more()
+    ids = sum(api.tracks_calls, [])
+    assert p.now["id"] == "20" and len(ids) == len(set(ids)) == 50 and len(p.queue) == 50
+    assert p.state()["has_more"] is False

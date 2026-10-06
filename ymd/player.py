@@ -32,6 +32,7 @@ class Feed:
     """A track list and where its next page comes from."""
     def __init__(self, source, station=None):
         self.source, self.station, self.tracks, self.started = source, station, [], False  # started: radioStarted sent
+        self.off = 0  # likes: ids already fetched
 
 
 class Player:
@@ -44,8 +45,7 @@ class Player:
         self.index, self.loaded, self.liked = -1, [], set()  # index: of the audible track in the play queue
         self.playing, self.time_pos, self.last_end, self.error = False, 0.0, None, None
         self.search_text, self.results, self.search_page, self.search_total = "", [], 0, 0
-        # like_off pages the one likes feed: browsing Liked while it plays reuses the play queue
-        self.like_ids, self.like_ids_at, self.like_off, self.likes_page1 = [], None, 0, None
+        self.like_ids, self.like_ids_at, self.likes_page1 = [], None, None
         self.loading, self.now = False, None  # now: the track mpv plays (play_queue[index])
         self.lock = asyncio.Lock()
 
@@ -77,14 +77,13 @@ class Player:
         async with self.lock:
             if self._show({"type": "likes", "title": "", "mood": ""}):
                 return
-            self.like_off = 0  # a new likes feed: the old one is neither shown nor playing
             try:
                 await self._likes_ids()
                 if not self.like_ids:
                     self.error = "nothing to play"; return
                 first = tuple(self.like_ids[:PAGE])
                 if self.likes_page1 and self.likes_page1[0] == first:
-                    self.feed.tracks, self.like_off = list(self.likes_page1[1]), len(first)
+                    self.feed.tracks, self.feed.off = list(self.likes_page1[1]), len(first)
                 else:
                     await self._more_likes(self.feed)
                     self.likes_page1 = (first, list(self.feed.tracks))
@@ -93,9 +92,9 @@ class Player:
                 self.notify()
 
     async def _more_likes(self, f):
-        ids = self.like_ids[self.like_off:self.like_off + PAGE]
+        ids = self.like_ids[f.off:f.off + PAGE]
         if ids:
-            self.like_off += len(ids)
+            f.off += len(ids)
             f.tracks += [tracks.info(t) for t in await self.api.tracks(ids)]
 
     async def _extend(self, f):
@@ -131,7 +130,7 @@ class Player:
             return len(self.results) < self.search_total
         if self.feed.station:
             return len(self.queue) < MAX_STATION_ROWS
-        return self.source["type"] == "likes" and self.like_off < len(self.like_ids)
+        return self.source["type"] == "likes" and self.feed.off < len(self.like_ids)
 
     async def start_wave(self, mood):
         await self._start_station(WAVE, {"type": "wave", "title": "", "mood": mood or ""})
@@ -257,10 +256,10 @@ class Player:
                     break
                 playable_i += 1
                 # Fetch more tracks for stations if needed
-                if playable_i >= len(self.play_queue):
+                if playable_i >= len(self.play_queue) and playable_i - i < PAGE:
                     await self._extend(self.play_feed)
-                if playable_i >= len(self.play_queue):
-                    # No playable tracks found: mpv keeps what it had
+                if playable_i >= len(self.play_queue) or playable_i - i >= PAGE:
+                    # No playable track within a page (a station may never end): mpv keeps what it had
                     restore()
                     self.error = "track unavailable"
                     self.notify()
@@ -400,7 +399,10 @@ class Player:
                 if f := self._local(tid):
                     f.unlink(missing_ok=True)  # maybe a bad copy
             if self.last_end == "eof" and self.index >= 0:
+                ended = self.loaded  # _play always makes a new list
                 async with self.lock:  # mpv has nothing after this track (or went idle): advance ourselves
+                    if self.loaded is not ended:
+                        return  # a play while this waited for the lock: the track that ended is gone
                     n = self.index + 1
                     edge = self.loaded[-1:] == [self.index]
                     if edge and n >= len(self.play_queue):
@@ -491,15 +493,19 @@ class Player:
             if not self.now:
                 return
             tid = self.now["id"]
+            feeds = [f for f in {self.feed, self.play_feed} if f.source["type"] == "likes"]  # paged over like_ids
             if tid in self.liked:
                 await self.api.users_likes_tracks_remove(tid); self.liked.discard(tid)
                 if tid in self.like_ids:
                     k = self.like_ids.index(tid); self.like_ids.remove(tid)
-                    self.like_off -= k < self.like_off
+                    for f in feeds:
+                        f.off -= k < f.off
             else:
                 await self.api.users_likes_tracks_add(tid); self.liked.add(tid)
                 if tid not in self.like_ids:
-                    self.like_ids.insert(0, tid); self.like_off += 1
+                    self.like_ids.insert(0, tid)
+                    for f in feeds:
+                        f.off += 1
             self.notify()
 
     async def dislike(self):

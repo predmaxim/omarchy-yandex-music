@@ -429,7 +429,7 @@ Panel {
         // Skeleton rows while the first page loads: the window keeps its size.
         Column {
           id: skeleton
-          visible: root.loggedIn && root.music.loading && root.shown.length === 0
+          visible: root.loggedIn && root.music.loading && root.shown.length === 0 && !Model.searching(root.music)
           width: parent.width
           height: root.listSpace
           spacing: Style.spacing.xs
