@@ -69,7 +69,10 @@ class Player:
             self.liked = set(self.like_ids)
 
     def _show(self, source, station=None, reuse=True):
-        """Lock held. Point the window at a source; the playing one is shown as is (True: nothing to fetch)."""
+        """Lock held. Point the window at a source; the playing one, or the one already shown, is shown as is
+        (True: nothing to fetch)."""
+        if reuse and (self.feed.source, self.feed.station) == (source, station) and self.feed.tracks:
+            return True  # the tab picked again: keep its list and scroll
         same = reuse and (self.play_feed.source, self.play_feed.station) == (source, station)
         self.feed = self.play_feed if same else Feed(source, station)
         self.loading = not same
