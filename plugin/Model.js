@@ -70,6 +70,17 @@ function rows(st, pending) {
   return st.queue.map(function(r, i) { return { id: r.id, title: r.title, artists: r.artists, current: i === cur } })
 }
 
+// Bring a ListModel to `rows` in place: changed rows set, a new page appended, extra rows
+// removed. Reassigning the model would throw the list back to the top.
+function syncRows(model, rows) {
+  if (model.count > rows.length) model.remove(rows.length, model.count - rows.length)
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i], o = i < model.count ? model.get(i) : null
+    if (!o) model.append(r)
+    else if (Object.keys(r).some(function(k) { return o[k] !== r[k] })) model.set(i, r)
+  }
+}
+
 function moodOptions(st, tr) {
   return (st.moods || []).map(function(m) { return { value: m, label: tr(MOOD_LABELS[m] || m) } })
 }

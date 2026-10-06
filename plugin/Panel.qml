@@ -18,11 +18,12 @@ Panel {
 
   readonly property var tr: I18n.translator(I18n.textLanguage(function(name) { return Quickshell.env(name) }))
   readonly property var music: link.music
-  // Rebuilt only when the rows really change, so the list keeps its scroll.
+  // The rows as an array; the list shows them through rowsModel, updated in place so it keeps its scroll.
   property var shown: []
   property string shownSig: ""
   readonly property bool loggedIn: root.music.running && root.music.auth === "ok"
   readonly property bool hasTrack: root.loggedIn && !!root.music.track
+  readonly property real listSpace: modal.height * 0.55   // the most the list may take
 
   property int cur: -1
   property bool btnFocus: false
@@ -43,11 +44,14 @@ Panel {
   function refreshRows() {
     var r = Model.rows(root.music, root.pendingIndex)
     var sig = JSON.stringify(r)
-    if (sig !== root.shownSig) { root.shownSig = sig; root.shown = r }
+    if (sig !== root.shownSig) { root.shownSig = sig; Model.syncRows(rowsModel, r); root.shown = r }
   }
   onMusicChanged: {
     var sig = JSON.stringify(root.music.source) + (root.music.search ? root.music.search.text : "")
-    if (sig !== root.sourceSig) { root.sourceSig = sig; root.askedAt = -1 }
+    if (sig !== root.sourceSig) {   // another list: start it from the top
+      root.sourceSig = sig; root.askedAt = -1
+      Qt.callLater(function() { list.positionViewAtBeginning() })
+    }
     if (root.pendingIndex >= 0 && root.music.index !== root.seenIndex) root.pendingIndex = -1   // ymd answered
     root.seenIndex = root.music.index
     root.pos = root.music.position || 0
@@ -131,12 +135,13 @@ Panel {
     if (opened) {
       cur = -1; head = -1; btnFocus = false
       moveGate.reset()
-      Qt.callLater(function() { if (list.contentHeight < list.height) root.requestMore() })
+      Qt.callLater(function() { if (list.contentHeight < root.listSpace) root.requestMore() })
       Qt.callLater(root.focusInput)
     }
   }
 
   PointerMoveGate { id: moveGate; referenceItem: card }
+  ListModel { id: rowsModel }
   Link { id: link; wanted: root.opened }
 
   Timer { id: pendingClear; interval: 3000; onTriggered: root.pendingIndex = -1 }
@@ -425,17 +430,17 @@ Panel {
           id: list
           visible: root.loggedIn
           width: parent.width
-          height: Math.min(contentHeight, modal.height * 0.55)
+          height: Math.min(contentHeight, root.listSpace)
           clip: true
           spacing: Style.spacing.xs
           boundsBehavior: Flickable.StopAtBounds
-          model: root.shown
+          model: rowsModel
           onContentYChanged: if (contentHeight - contentY - height < height * 0.5) root.requestMore()
-          onContentHeightChanged: if (contentHeight < height) root.requestMore()   // list too short to scroll
+          onContentHeightChanged: if (contentHeight < root.listSpace) root.requestMore()   // list too short to scroll
 
           delegate: CursorSurface {
             id: row
-            required property var modelData
+            required property var model
             required property int index
             width: list.width
             implicitHeight: Math.max(Style.space(50), texts.implicitHeight + Style.spacing.rowPaddingX * 2)
@@ -459,7 +464,7 @@ Panel {
               anchors.leftMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               width: Style.space(20)
-              text: row.modelData.current ? "\u{F040A}" : ""
+              text: row.model.current ? "\u{F040A}" : ""
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.body
@@ -476,17 +481,17 @@ Panel {
                 width: parent.width
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
-                text: row.modelData.title
+                text: row.model.title
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.body
-                font.bold: row.modelData.current
+                font.bold: row.model.current
               }
               Text {
                 width: parent.width
                 elide: Text.ElideRight
                 textFormat: Text.PlainText
-                text: row.modelData.artists
+                text: row.model.artists
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
