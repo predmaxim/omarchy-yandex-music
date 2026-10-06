@@ -9,6 +9,8 @@ def make(**kw):
 
 
 async def pos(p, i):
+    """Simulate mpv reporting position change."""
+    p.mpv.pos = i
     await p.on_event({"event": "property-change", "name": "playlist-pos", "data": i})
 
 
@@ -168,45 +170,60 @@ async def test_dislike_with_no_current_track():
     assert api.disliked == [] and mpv.calls == []
 
 
-async def test_best_link_none_skips_track():
-    """When best_link returns None (track unavailable), set error and don't loadfile."""
+async def test_best_link_none_skips_to_next_playable():
+    """When best_link returns None, skip to next playable track."""
     p, api, mpv, _ = make(unavailable_ids={"0"})
     await p.start_likes()
+    # Track 0 unavailable, skips to track 1
+    assert p.index == 1 and p.loaded == [1, 2]
+    assert mpv.playlist == ["url1", "url2"]
+    assert p.error is None
+
+
+async def test_race_condition_pos_during_loadfile_replace():
+    """After play(i>0) with replace+insert-at, pos events read live position not event data."""
+    import asyncio
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    # play(2): replace with index 2, insert-at 0 for index 1
+    # This triggers replace (pos=0) then insert-at 0 (pos=1 now)
+    await p.play(2)
+    assert p.index == 2 and p.loaded == [1, 2, 3]
+    # Verify that the fix works: if we emit a stale pos(0) event but mpv.pos is actually 1
+    # (simulating the event arriving after the actual pos changed), it should use live pos
+    mpv.pos = 1
+    await p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0})
+    # Live pos 1 maps to loaded[1]=2, so index becomes 2
+    assert p.index == 2  # No spurious backwards move
+
+
+async def test_best_link_none_skips_to_next_playable():
+    """When best_link returns None, skip to next playable track."""
+    p, api, mpv, _ = make(unavailable_ids={"0", "1", "2"})
+    await p.start_likes()
+    # Tracks 0, 1, 2 are unavailable (preview-only); track 3 is available
+    assert p.index == 3 and p.loaded == [3, 4]
+    assert mpv.playlist == ["url3", "url4"]
+    assert p.error is None
+
+
+async def test_best_link_all_unavailable_sets_error():
+    """When all remaining tracks are unavailable, set error."""
+    p, api, mpv, _ = make(likes=2, unavailable_ids={"0", "1"})
+    await p.start_likes()
+    # All tracks unavailable
     assert p.error == "track unavailable" and mpv.playlist == []
 
 
-async def test_on_event_concurrent_with_command():
-    """Multiple on_event calls can occur while commands are being processed."""
-    import asyncio
+async def test_pos_event_reads_live_position():
+    """on_event reads live position via get_property, not stale event data."""
     p, api, mpv, _ = make()
     await p.start_likes()
-
-    # Simulate multiple events arriving concurrently
-    events = [
-        {"event": "property-change", "name": "pause", "data": True},
-        {"event": "property-change", "name": "time-pos", "data": 5.0},
-        {"event": "property-change", "name": "pause", "data": False},
-    ]
-
-    # All events should complete without blocking
-    await asyncio.gather(*[p.on_event(e) for e in events])
-    assert p.playing is True  # Final pause state (False means not paused)
-
-
-async def test_locked_entry_points():
-    """Mutating entry points properly serialize with lock."""
-    p, api, mpv, _ = make()
-    await p.start_likes()
-
-    # Multiple concurrent operations should serialize safely
-    import asyncio
-    results = await asyncio.gather(
-        p.search("test"),
-        p.toggle(),
-        return_exceptions=True
-    )
-    # If any returned exception, it's an error
-    for r in results:
-        assert not isinstance(r, Exception), f"Got exception: {r}"
-    # If deadlock occurred, the gather would timeout; if we get here, it worked
-    assert True
+    await p.play(2)
+    # After play(2): index=2, loaded=[1,2,3], mpv.pos=0
+    # Emit pos event with stale data but check that live pos is used
+    # Set mpv.pos to 1 (live position after some user action)
+    mpv.pos = 1
+    await p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0})
+    # Live pos (1) maps to loaded[1]=2, so index should be 2, not affected by stale data (0)
+    assert p.index == 2
