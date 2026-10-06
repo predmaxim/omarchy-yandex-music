@@ -192,14 +192,15 @@ function moveCursor(st, c, step, mood) {
   return next === c.row ? c : cursorAt(next, st, mood, 0)
 }
 
-// ←/→ (dx -1/1) on the cursor's row: { col, tab?, mood? } — a tab or a mood applies at once — or { seek: seconds }:
-// 10 s on the seek row (Shift: 30), Shift+←/→ anywhere else 10 s. null: no cursor row.
+// ←/→ (dx -1/1) on the cursor's row: { col, tab?, mood? } — a tab or a mood applies at once (a tab also
+// while searching: the results give way) — or { seek: seconds }: 10 s on the seek row (Shift: 30),
+// Shift+←/→ anywhere else 10 s. null: no cursor row.
 function sideCursor(st, c, dx, shift, mood) {
   if (c.row === "seek" || (shift && canToggle(st))) return { seek: dx * (c.row === "seek" && shift ? 30 : 10) }
   var n = rowItems(c.row, st)
   if (!n) return null
   var r = { col: Math.max(0, Math.min(n - 1, c.col + dx)) }
-  if (c.row === "tabs" && TABS[r.col] !== st.source.type) r.tab = TABS[r.col]
+  if (c.row === "tabs" && (TABS[r.col] !== st.source.type || searching(st))) r.tab = TABS[r.col]
   if (c.row === "mood" && st.moods[r.col] !== shownMood(st, mood)) r.mood = st.moods[r.col]
   return r
 }
@@ -212,7 +213,8 @@ function screenCursor(st, c) {
   return c.row === "controls" ? cursorAt("controls", st) : c
 }
 
-// The mood to send once stepping stopped (MOOD_DELAY): null if it is the wave's already or the wave is gone.
+// The mood to send once stepping stopped (MOOD_DELAY), or at once when the window closes or the screen
+// changes meanwhile: null if it is the wave's already or the wave is not browsed any more.
 function moodToSend(st, pending) {
   return pending && st.source && st.source.type === "wave" && pending !== shownMood(st, "") ? pending : null
 }
