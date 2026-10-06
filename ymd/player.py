@@ -139,7 +139,7 @@ class Player:
         async with self.lock:
             await self._play(i)
 
-    async def _play(self, i):
+    async def _play(self, i, kind="skip"):
         """Internal play without lock; must be called while holding self.lock.
 
         Only the current track's link is fetched before it starts; neighbours,
@@ -150,12 +150,18 @@ class Player:
         prev = (self.index, self.time_pos, self.duration)
         skip = None
         if self.station and 0 <= self.index < len(self.queue) and self.loaded:
-            skip = (self.station, "skip", self.queue[self.index]["fid"], self.time_pos)
+            skip = (self.station, kind, self.queue[self.index]["fid"], self.time_pos)
+        prev_gen, prev_faded = self.gen, self.faded
         self.gen += 1
         gen = self.gen
         self.index, self.error, self.time_pos, self.duration, self.last_end = i, None, 0.0, 0.0, None
         self.faded = False
         self.notify()  # the marker moves before any network call
+
+        def restore():
+            # nothing new was loaded: the old track keeps playing, with its window and marker
+            self.index, self.time_pos, self.duration = prev
+            self.gen, self.faded = prev_gen, prev_faded
 
         try:
             # Find a playable track, skipping unavailable ones
@@ -170,21 +176,21 @@ class Player:
                     await self._fetch_station()
                 if playable_i >= len(self.queue):
                     # No playable tracks found: mpv keeps what it had
-                    self.index, self.time_pos, self.duration = prev
+                    restore()
                     self.error = "track unavailable"
                     self.notify()
                     return
             self.index = playable_i
             await self._load(url, "replace")
         except BaseException:
-            self.index, self.time_pos, self.duration = prev  # the marker follows what mpv plays
+            restore()  # the marker follows what mpv plays
             self.notify()
             raise
+        self.loaded = [playable_i]  # before anything else can fail: mpv holds exactly this
+        self._spawn(self._after_play(gen, playable_i, skip))
         await self.mpv.command("set_property", "pause", False)  # pause is global in mpv
         self.playing = True
-        self.loaded = [playable_i]
         self.notify()
-        self._spawn(self._after_play(gen, playable_i, skip))
 
     async def _after_play(self, gen, i, skip):
         try:
@@ -305,6 +311,10 @@ class Player:
                 self.urls.pop(tid, None)  # stale link: refetch next time
                 if f := self._local(tid):
                     f.unlink(missing_ok=True)  # maybe a bad copy
+            if self.last_end == "eof" and self.loaded and self.loaded[-1] == self.index:
+                async with self.lock:  # no next entry in mpv (load failed): advance ourselves
+                    if self.loaded and self.loaded[-1] == self.index and self.index + 1 < len(self.queue):
+                        await self._step(1, "trackFinished")
             return
         if msg.get("event") != "property-change":
             return
@@ -357,11 +367,24 @@ class Player:
         self.time_pos = s
         self.notify()
 
+    async def _step(self, d, kind="skip"):
+        """Lock held. At the edge of the window (neighbour not loaded) play from the queue."""
+        n = self.index + d
+        if n >= 0 and (not self.loaded or self.loaded[-1 if d > 0 else 0] == self.index):
+            if d > 0 and self.station and n >= len(self.queue):
+                await self._fetch_station()
+            if n < len(self.queue):
+                await self._play(n, kind)
+                return
+        await self.mpv.command("playlist-next" if d > 0 else "playlist-prev")
+
     async def next(self):
-        await self.mpv.command("playlist-next")
+        async with self.lock:
+            await self._step(1)
 
     async def prev(self):
-        await self.mpv.command("playlist-prev")
+        async with self.lock:
+            await self._step(-1)
 
     async def like(self):
         async with self.lock:
@@ -379,7 +402,7 @@ class Player:
             if not (0 <= self.index < len(self.queue)):
                 return
             await self.api.users_dislikes_tracks_add(self.queue[self.index]["id"])
-            await self.mpv.command("playlist-next")
+            await self._step(1)
 
     # --- state ---------------------------------------------------------------
     def state(self):

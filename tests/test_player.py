@@ -452,3 +452,68 @@ def test_trim_removes_least_recently_used(tmp_path):
     os.utime(tmp_path / "0.mp3", (200, 200))     # 0 was played last
     diskcache.trim(tmp_path, limit=20)
     assert sorted(f.name for f in tmp_path.glob("*.mp3")) == ["0.mp3", "2.mp3"]
+
+
+# --- fix round 1 ---
+
+
+async def test_next_advances_when_after_play_failed():
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    async def boom(*a, **k): raise OSError("x")
+    p._append_next = boom
+    await p.play(0); await p.settle()
+    assert p.loaded == [0]
+    await p.next()
+    assert p.index == 1 and mpv.playlist[0] == "url1"
+    await p.prev()
+    assert p.index == 0
+
+
+async def test_eof_with_single_entry_advances():
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    async def boom(*a, **k): raise OSError("x")
+    p._append_next = boom
+    await p.play(0); await p.settle()
+    await p.on_event({"event": "end-file", "reason": "eof"})
+    assert p.index == 1 and mpv.playlist == ["url1"]
+
+
+async def test_eof_with_neighbour_loaded_leaves_it_to_mpv():
+    p, api, mpv, _ = make()
+    await likes(p)
+    await p.on_event({"event": "end-file", "reason": "eof"})
+    assert p.index == 0
+
+
+async def test_unpause_failure_keeps_window_consistent():
+    p, api, mpv, _ = make()
+    await likes(p)
+    orig = mpv.command
+    async def cmd(*a):
+        if a[:2] == ("set_property", "pause"): raise OSError("x")
+        return await orig(*a)
+    mpv.command = cmd
+    with pytest.raises(OSError):
+        await p.play(3)
+    mpv.command = orig
+    await p.settle()
+    assert p.index == 3 and p.loaded[p.loaded.index(3)] == 3 and mpv.playlist[p.loaded.index(3)] == "url3"
+
+
+async def test_unavailable_keeps_old_neighbours():
+    p, api, mpv, _ = make(likes=3, unavailable_ids={"2"})
+    await likes(p)
+    await p.play(2); await p.settle()
+    assert p.error == "track unavailable" and p.index == 0 and mpv.playlist == ["url0", "url1"]
+
+
+def test_trim_drops_stale_part_and_counts_fresh(tmp_path):
+    import os
+    from ymd import diskcache
+    old = tmp_path / "a.part"; old.write_bytes(b"x"); os.utime(old, (1, 1))
+    (tmp_path / "b.part").write_bytes(b"x" * 15)
+    (tmp_path / "c.mp3").write_bytes(b"x" * 10)
+    diskcache.trim(tmp_path, limit=20)
+    assert not old.exists() and not (tmp_path / "c.mp3").exists() and (tmp_path / "b.part").exists()

@@ -27,6 +27,7 @@ Panel {
   property int cur: -1
   property bool btnFocus: false
   property int head: -1
+  property int seenIndex: -1
   property int pendingIndex: -1   // row clicked, shown as current until ymd confirms
   property real pos: 0            // seek bar position, interpolated between state lines
   property real posStamp: 0
@@ -43,7 +44,8 @@ Panel {
     if (sig !== root.shownSig) { root.shownSig = sig; root.shown = r }
   }
   onMusicChanged: {
-    if (root.pendingIndex >= 0 && root.music.index === root.pendingIndex) root.pendingIndex = -1
+    if (root.pendingIndex >= 0 && root.music.index !== root.seenIndex) root.pendingIndex = -1   // ymd answered
+    root.seenIndex = root.music.index
     root.pos = root.music.position || 0
     root.posStamp = Date.now()
     refreshRows()

@@ -1,6 +1,7 @@
 """On-disk copies of liked tracks: <cache>/predmaxim.yandex-music/tracks/<id>.mp3, LRU by mtime."""
 import os
 import shutil
+import time
 import urllib.request
 from pathlib import Path
 
@@ -15,8 +16,12 @@ def fetch(url, path):
 
 def trim(d, limit=LIMIT):
     """Delete the least recently used files (play touches mtime) until under the limit."""
+    parts = list(d.glob("*.part"))
+    for f in parts[:]:
+        if time.time() - f.stat().st_mtime > 3600:  # abandoned download
+            f.unlink(); parts.remove(f)
     files = sorted((f for f in d.glob("*.mp3")), key=lambda f: f.stat().st_mtime)
-    total = sum(f.stat().st_size for f in files)
+    total = sum(f.stat().st_size for f in files + parts)
     for f in files:
         if total <= limit:
             break
