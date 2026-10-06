@@ -18,11 +18,12 @@ var ICONS = {
   myWave: String.fromCodePoint(0xF0388)    // the My Wave screen before the wave starts
 }
 
-// Header buttons, in cursor order (Panel.head = index).
+// Header buttons on list tabs, in cursor order.
 var HEAD = ["prev", "toggle", "next", "dislike", "like"]
-// The My Wave screen: its buttons by view, and the source row above them.
+// The My Wave screen's buttons, by view.
 var WAVE_CONTROLS = { playing: ["dislike", "prev", "toggle", "next", "like"], idle: ["start"] }
-var SOURCE_ROW = ["wave", "likes", "mood"]
+var TABS = ["wave", "likes"]
+var MOOD_DELAY = 400   // ms: stepping through moods restarts a playing wave once, after the last step
 
 var MOOD_LABELS = { all: "Any", fun: "Fun", active: "Energetic", calm: "Calm", sad: "Sad" }
 
@@ -142,11 +143,76 @@ function waveMood(st) {
   return w ? w.mood : "all"
 }
 
-// Where the keyboard cursor starts when the window opens: on play/pause (▶ on the idle wave screen);
-// with nothing audible on a list tab, on the first row instead, so Enter does something (plays it).
+// --- the keyboard cursor: { row, col, cur } -------------------------------------------------
+// row: one of cursorRows (or "" for none); col: the item in it (tab, mood, button; on a list row
+// 1 is its wave button); cur: the list row. ↑/↓ walk rows, ←/→ the items of a row.
+
+function controlRow(st) { return waveView(st) ? waveControls(st) : HEAD }
+
+// The rows the cursor walks on this screen, top to bottom: My Wave — tabs, mood, seek (while the
+// wave plays), buttons; list tabs — tabs, header buttons (while a track is audible), the list.
+function cursorRows(st) {
+  if (!st || !st.running || st.auth !== "ok") return []
+  var wave = waveView(st)
+  if (wave) return ["tabs", "mood"].concat(wave === "playing" && canToggle(st) ? ["seek"] : [], ["controls"])
+  return ["tabs"].concat(canToggle(st) ? ["controls"] : [], rows(st, -1).length ? ["list"] : [])
+}
+
+function rowItems(row, st) {
+  return { tabs: TABS.length, mood: (st.moods || []).length, controls: controlRow(st).length, list: 2 }[row] || 0
+}
+
+// The mood shown as picked: the one just stepped to (pending, not sent yet) or the wave's.
+function shownMood(st, pending) { return pending || (st.source && st.source.mood) || "all" }
+
+// A row as the cursor enters it: on the shown tab / mood, on play/pause (▶ before the wave starts).
+function cursorAt(row, st, mood, cur) {
+  var col = row === "tabs" ? TABS.indexOf(st.source.type)
+          : row === "mood" ? (st.moods || []).indexOf(shownMood(st, mood))
+          : row === "controls" ? controlRow(st).indexOf(waveView(st) === "idle" ? "start" : "toggle") : 0
+  return { row: row, col: Math.max(0, col), cur: row === "list" ? cur || 0 : -1 }
+}
+
+// Where the cursor starts when the window opens: on play/pause (▶ on the idle wave screen);
+// with nothing audible on a list tab, on its first row, so Enter does something (plays it).
 function initialCursor(st) {
-  var wave = waveControls(st)
-  if (wave.length) return { head: wave.indexOf(wave.length > 1 ? "toggle" : "start"), cur: -1 }
-  if (canToggle(st)) return { head: HEAD.indexOf("toggle"), cur: -1 }
-  return { head: -1, cur: st.running && st.auth === "ok" && rows(st, -1).length ? 0 : -1 }
+  var r = cursorRows(st)
+  if (r.indexOf("controls") >= 0) return cursorAt("controls", st)
+  if (r.indexOf("list") >= 0) return cursorAt("list", st, "", 0)
+  return r.length ? cursorAt(r[0], st) : { row: "", col: 0, cur: -1 }
+}
+
+// ↑/↓ (step -1/1). Without a cursor (just typed): ↓ to the first result, ↑ where the window opens.
+function moveCursor(st, c, step, mood) {
+  var r = cursorRows(st), count = rows(st, -1).length
+  if (c.row === "list" && r.indexOf("list") >= 0 && c.cur + step >= 0) return cursorAt("list", st, mood, Math.min(count - 1, c.cur + step))
+  var k = r.indexOf(c.row)
+  if (k < 0) return step > 0 && r.indexOf("list") >= 0 ? cursorAt("list", st, mood, 0) : initialCursor(st)
+  var next = r[Math.max(0, Math.min(r.length - 1, k + step))]
+  return next === c.row ? c : cursorAt(next, st, mood, 0)
+}
+
+// ←/→ (dx -1/1) on the cursor's row: { col, tab?, mood? } — a tab or a mood applies at once — or { seek: seconds }:
+// 10 s on the seek row (Shift: 30), Shift+←/→ anywhere else 10 s. null: no cursor row.
+function sideCursor(st, c, dx, shift, mood) {
+  if (c.row === "seek" || (shift && canToggle(st))) return { seek: dx * (c.row === "seek" && shift ? 30 : 10) }
+  var n = rowItems(c.row, st)
+  if (!n) return null
+  var r = { col: Math.max(0, Math.min(n - 1, c.col + dx)) }
+  if (c.row === "tabs" && TABS[r.col] !== st.source.type) r.tab = TABS[r.col]
+  if (c.row === "mood" && st.moods[r.col] !== shownMood(st, mood)) r.mood = st.moods[r.col]
+  return r
+}
+
+// The screen changed (another tab, the wave started or stopped): the same row if it is there
+// (on the buttons: on play/pause again), else where the window opens.
+function screenCursor(st, c) {
+  if (!c.row) return c
+  if (cursorRows(st).indexOf(c.row) < 0) return initialCursor(st)
+  return c.row === "controls" ? cursorAt("controls", st) : c
+}
+
+// The mood to send once stepping stopped (MOOD_DELAY): null if it is the wave's already or the wave is gone.
+function moodToSend(st, pending) {
+  return pending && st.source && st.source.type === "wave" && pending !== shownMood(st, "") ? pending : null
 }
