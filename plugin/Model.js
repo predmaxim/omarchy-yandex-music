@@ -150,12 +150,12 @@ function waveMood(st) {
 function controlRow(st) { return waveView(st) ? waveControls(st) : HEAD }
 
 // The rows the cursor walks on this screen, top to bottom: My Wave — tabs, mood, seek (while the
-// wave plays), buttons; list tabs — tabs, header buttons (while a track is audible), the list.
+// wave plays), buttons; list tabs — tabs, header buttons and seek (while a track is audible), the list.
 function cursorRows(st) {
   if (!st || !st.running || st.auth !== "ok") return []
   var wave = waveView(st)
   if (wave) return ["tabs", "mood"].concat(wave === "playing" && canToggle(st) ? ["seek"] : [], ["controls"])
-  return ["tabs"].concat(canToggle(st) ? ["controls"] : [], rows(st, -1).length ? ["list"] : [])
+  return ["tabs"].concat(canToggle(st) ? ["controls", "seek"] : [], rows(st, -1).length ? ["list"] : [])
 }
 
 function rowItems(row, st) {

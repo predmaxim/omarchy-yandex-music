@@ -398,11 +398,26 @@ Panel {
           }
         }
 
-        SeekRow {
+        // The header's seek: a cursor row, ←/→ ±10 s (Shift: 30).
+        CursorSurface {
           id: headSeek
           visible: !root.wave && root.loggedIn
           enabled: root.hasTrack
           width: parent.width
+          implicitHeight: headSeekRow.implicitHeight + Style.space(4) * 2
+          hasCursor: root.row === "seek"
+          foreground: root.bar.foreground
+          SeekRow {
+            id: headSeekRow
+            anchors.verticalCenter: parent.verticalCenter
+            x: Style.space(4)
+            width: parent.width - x * 2
+            enabled: headSeek.enabled
+          }
+          HoverHandler {
+            id: headSeekHover
+            onPointChanged: if (hovered && root.hasTrack) root.hoverCursor(headSeek, headSeekHover.point.position, "seek", 0)
+          }
         }
 
         PanelSeparator { id: sep; visible: !root.wave; foreground: root.bar.foreground }
