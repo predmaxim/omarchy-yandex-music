@@ -27,6 +27,9 @@ Panel {
   property int cur: -1
   property bool btnFocus: false
   property int head: -1
+  property int pendingIndex: -1   // row clicked, shown as current until ymd confirms
+  property real pos: 0            // seek bar position, interpolated between state lines
+  property real posStamp: 0
 
   visible: false
   implicitWidth: 0
@@ -35,11 +38,24 @@ Panel {
   function send(name, args) { link.send(Model.cmd(name, args)) }
 
   function refreshRows() {
-    var r = Model.rows(root.music)
+    var r = Model.rows(root.music, root.pendingIndex)
     var sig = JSON.stringify(r)
     if (sig !== root.shownSig) { root.shownSig = sig; root.shown = r }
   }
-  onMusicChanged: refreshRows()
+  onMusicChanged: {
+    if (root.pendingIndex >= 0 && root.music.index === root.pendingIndex) root.pendingIndex = -1
+    root.pos = root.music.position || 0
+    root.posStamp = Date.now()
+    refreshRows()
+  }
+  onPendingIndexChanged: refreshRows()
+
+  function seekTo(s) {
+    var d = root.music.duration || 0
+    s = Math.max(0, d > 0 ? Math.min(s, d) : s)
+    root.send("seek", { seconds: s })
+    root.pos = s; root.posStamp = Date.now()
+  }
   Component.onCompleted: refreshRows()
 
   function focusInput() {
@@ -62,6 +78,7 @@ Panel {
   }
 
   function side(dx, event) {
+    if ((event.modifiers & Qt.ShiftModifier) && root.hasTrack) { root.seekTo(root.pos + dx * 10); return }
     if (root.head >= 0) { root.head = Math.max(0, Math.min(1, root.head + dx)); return }
     if (root.cur >= 0) { root.btnFocus = dx > 0; return }
     event.accepted = false
@@ -78,7 +95,7 @@ Panel {
   function playRow(i) {
     if (i < 0 || i >= root.shown.length) return
     if (Model.searching(root.music)) { root.send("play-search", { index: i }); field.text = "" }
-    else root.send("play", { index: i })
+    else { root.send("play", { index: i }); root.pendingIndex = i; pendingClear.restart() }
     root.cur = -1; root.btnFocus = false
   }
 
@@ -107,6 +124,15 @@ Panel {
 
   PointerMoveGate { id: moveGate; referenceItem: card }
   Link { id: link; wanted: root.opened }
+
+  Timer { id: pendingClear; interval: 3000; onTriggered: root.pendingIndex = -1 }
+
+  Timer {
+    interval: 500
+    repeat: true
+    running: root.opened && root.hasTrack && root.music.playing
+    onTriggered: root.pos = Model.position(root.music, Date.now() - root.posStamp)
+  }
 
   // Search waits for a pause in typing.
   Timer {
@@ -204,6 +230,42 @@ Panel {
                 onClicked: root.send(modelData.cmd)
               }
             }
+          }
+        }
+
+        // Seek bar: only with a track loaded
+        Row {
+          visible: root.hasTrack && root.music.duration > 0
+          width: parent.width
+          spacing: Style.space(8)
+          Text {
+            id: elapsed
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(40)
+            horizontalAlignment: Text.AlignRight
+            text: Model.fmtTime(seek.dragging ? seek.liveValue : root.pos)
+            color: Qt.darker(root.bar.foreground, 1.4)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          PanelSlider {
+            id: seek
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - elapsed.width - total.width - parent.spacing * 2
+            bar: root.bar
+            minimum: 0
+            maximum: Math.max(1, root.music.duration || 1)
+            value: root.pos
+            onReleased: function(v) { root.seekTo(v) }
+          }
+          Text {
+            id: total
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(40)
+            text: Model.fmtTime(root.music.duration)
+            color: Qt.darker(root.bar.foreground, 1.4)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
           }
         }
 
