@@ -234,8 +234,8 @@ Panel {
                       { icon: root.music.playing ? Model.ICONS.paused : Model.ICONS.play,
                         tip: root.music.playing ? "Pause" : "Play", cmd: "toggle" },
                       { icon: Model.ICONS.next, tip: "Next", cmd: "next" },
-                      { icon: "\u{F0514}", tip: "Dislike", cmd: "dislike" },
-                      { icon: root.music.track && root.music.track.liked ? "\u{F02D1}" : "\u{F02D5}", tip: "Like", cmd: "like" }]
+                      { icon: Model.ICONS.dislike, tip: "Dislike", cmd: "dislike" },
+                      { icon: root.music.track && root.music.track.liked ? Model.ICONS.liked : Model.ICONS.like, tip: "Like", cmd: "like" }]
               Button {
                 required property var modelData
                 required property int index
@@ -500,7 +500,7 @@ Panel {
               anchors.leftMargin: Style.space(12)
               anchors.verticalCenter: parent.verticalCenter
               width: Style.space(20)
-              text: row.model.current ? "\u{F040A}" : ""
+              text: row.model.current ? Model.ICONS.play : ""
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.body
@@ -539,7 +539,7 @@ Panel {
               anchors.right: parent.right
               anchors.rightMargin: Style.space(8)
               anchors.verticalCenter: parent.verticalCenter
-              iconText: "\u{F0411}"
+              iconText: Model.ICONS.wave
               iconSize: Style.font.subtitle * 1.2
               horizontalPadding: Style.space(4)
               verticalPadding: Style.space(2)

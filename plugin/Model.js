@@ -3,14 +3,18 @@
 // ymd's state line -> what the bar icon and the window show, and the command
 // lines the plugin writes to ymd's socket.
 
-// Nerd Font glyphs: play, pause, a plain note when nothing plays; prev, next…
+// Nerd Font (MDI) glyphs: play, pause, a plain note when nothing plays; header buttons; row buttons.
 var ICONS = {
-  playing: String.fromCodePoint(0xF040A),
-  paused: String.fromCodePoint(0xF03E4),
+  playing: String.fromCodePoint(0xF040A),  // play
+  paused: String.fromCodePoint(0xF03E4),   // pause
   empty: String.fromCodePoint(0xF075A),
-  prev: String.fromCodePoint(0xF04AE),
-  next: String.fromCodePoint(0xF04AD),
-  play: String.fromCodePoint(0xF040A)
+  prev: String.fromCodePoint(0xF04AE),     // skip_previous
+  next: String.fromCodePoint(0xF04AD),     // skip_next
+  play: String.fromCodePoint(0xF040A),
+  dislike: String.fromCodePoint(0xF0512),  // thumb_down_outline
+  like: String.fromCodePoint(0xF02D5),     // heart_outline
+  liked: String.fromCodePoint(0xF02D1),    // heart
+  wave: String.fromCodePoint(0xF0411)      // playlist_play
 }
 
 // Header buttons, in cursor order (Panel.head = index).

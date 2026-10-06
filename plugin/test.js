@@ -29,6 +29,11 @@ assert.deepStrictEqual([M.view(st).lit, M.view(st).icon], [true, M.ICONS.playing
 assert.strictEqual(M.ICONS.playing, String.fromCodePoint(0xF040A))
 assert.strictEqual(M.ICONS.paused, String.fromCodePoint(0xF03E4))
 assert.strictEqual(M.ICONS.empty, String.fromCodePoint(0xF075A))
+// Header and row glyphs (MDI): checked against the font's glyph names
+const glyphs = { prev: 0xF04AE, next: 0xF04AD, play: 0xF040A, dislike: 0xF0512, like: 0xF02D5, liked: 0xF02D1, wave: 0xF0411 }
+for (const k in glyphs) assert.strictEqual(M.ICONS[k], String.fromCodePoint(glyphs[k]), "ICONS." + k)
+const panel = fs.readFileSync(__dirname + "/Panel.qml", "utf8")
+assert.ok(!/\\u\{F[0-9A-F]{4}\}/i.test(panel), "Panel.qml: glyphs live in Model.ICONS")
 for (const s of [M.OFFLINE, at({ track: null }), at({ auth: "none", track: null })]) assert.strictEqual(M.view(s).icon, M.ICONS.empty)
 assert.deepStrictEqual([M.view(at({ playing: false })).lit, M.view(at({ playing: false })).icon], [true, M.ICONS.paused])
 const vv = M.view(st); assert.strictEqual(ru(vv.tip, vv.arg, vv.arg2), "Кино — Группа крови")
