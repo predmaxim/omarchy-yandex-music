@@ -781,3 +781,20 @@ async def test_more_on_shared_likes_feed_while_it_plays():
     ids = sum(api.tracks_calls, [])
     assert p.now["id"] == "20" and len(ids) == len(set(ids)) == 50 and len(p.queue) == 50
     assert p.state()["has_more"] is False
+
+
+async def test_audible_track_switches_when_the_new_file_is_loaded():
+    p, api, mpv, n = make()
+    await likes(p)
+    await p.on_event({"event": "property-change", "name": "duration", "data": 200.0})
+    await p.on_event({"event": "property-change", "name": "time-pos", "data": 50.0})
+    seen, orig = [], mpv.command
+    async def spy(*a):
+        if a[:1] == ("loadfile",) and a[2] == "replace":
+            s = p.state(); seen.append((s["index"], s["track"]["id"], s["position"], s["duration"]))
+        return await orig(*a)
+    mpv.command = spy
+    await p.play(3)
+    assert seen == [(3, "0", 50.0, 200.0)]      # marker moved; header and seek still the old track while it loads
+    s = p.state()
+    assert (s["track"]["id"], s["position"], s["duration"]) == ("3", 0.0, 0.0)

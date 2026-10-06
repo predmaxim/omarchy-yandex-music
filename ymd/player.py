@@ -232,22 +232,21 @@ class Player:
         feed = feed or self.play_feed
         if not 0 <= i < len(feed.tracks):
             self.error = "nothing to play"; self.notify(); return
-        prev = (self.play_feed, self.index, self.time_pos, self.duration)
+        prev = (self.play_feed, self.index)
         skip = None
         if self.play_feed.station and 0 <= self.index < len(self.play_queue) and self.loaded:
             skip = (self.play_feed.station, kind, self.play_queue[self.index]["fid"], self.time_pos)
-        prev_gen, prev_faded = self.gen, self.faded
+        prev_gen = self.gen
         self.gen += 1
         gen = self.gen
         self.play_feed = feed
-        self.index, self.error, self.time_pos, self.duration, self.last_end = i, None, 0.0, 0.0, None
-        self.faded = False
-        self.notify()  # the marker moves before any network call
+        self.index, self.error, self.last_end = i, None, None
+        self.notify()  # the marker moves before any network call; now, position, duration: the old track's still
 
         def restore():
             # nothing new was loaded: the old track keeps playing, with its queue, window and marker
-            self.play_feed, self.index, self.time_pos, self.duration = prev
-            self.gen, self.faded = prev_gen, prev_faded
+            self.play_feed, self.index = prev
+            self.gen = prev_gen
 
         try:
             # Find a playable track, skipping unavailable ones
@@ -272,7 +271,7 @@ class Player:
             restore()  # the marker follows what mpv plays
             self.notify()
             raise
-        self.now = self.play_queue[playable_i]
+        self.now, self.time_pos, self.duration, self.faded = self.play_queue[playable_i], 0.0, 0.0, False  # mpv has it
         self.loaded = [playable_i]  # before anything else can fail: mpv holds exactly this
         self._spawn(self._after_play(gen, playable_i, skip))
         await self.mpv.command("set_property", "pause", False)  # pause is global in mpv

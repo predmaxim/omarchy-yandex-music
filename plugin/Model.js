@@ -101,10 +101,10 @@ function fmtTime(s) {
   return Math.floor(s / 60) + ":" + (r < 10 ? "0" : "") + r
 }
 
-// Position now: the one from the state line plus the time since (only while playing).
+// Position now: the one from the state line plus the time since (only while playing); 0 until the length is known.
 function position(st, elapsedMs) {
   var p = (st.position || 0) + (st.playing ? elapsedMs / 1000 : 0)
-  return st.duration > 0 ? Math.min(p, st.duration) : p
+  return st.duration > 0 ? Math.min(p, st.duration) : 0
 }
 
 // Ask for the next page once per list length, when ymd has more and is not busy.

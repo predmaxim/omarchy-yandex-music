@@ -223,20 +223,29 @@ Panel {
     }
   }
 
-  // A cover image, with rounded corners when radius > 0.
+  // A cover image, with rounded corners when radius > 0. A new url shows once it has loaded:
+  // the previous picture stays until then, so a track change never blanks it.
   component Cover: Item {
     id: coverItem
     property string url: ""
     property real radius: 0
+    property string shown: ""
     readonly property bool ready: pic.status === Image.Ready
+    onUrlChanged: if (!url) shown = ""
     layer.enabled: radius > 0
     layer.effect: MultiEffect { maskEnabled: true; maskSource: coverMask; maskThresholdMin: 0.5; maskSpreadAtMin: 1.0 }
     Image {
       id: pic
       anchors.fill: parent
-      source: coverItem.url
+      source: coverItem.shown
       fillMode: Image.PreserveAspectCrop
       asynchronous: true
+    }
+    Image {   // loads the new url out of sight; the pixmap cache hands it to pic at once
+      visible: false
+      source: coverItem.url
+      asynchronous: true
+      onStatusChanged: if (status === Image.Ready || status === Image.Error) coverItem.shown = coverItem.url
     }
     Item {
       id: coverMask
