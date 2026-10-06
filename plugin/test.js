@@ -186,6 +186,9 @@ assert.deepStrictEqual(M.sideCursor(W, C("controls", 2), 1, false, ""), { col: 3
 assert.deepStrictEqual(M.sideCursor(st, C("controls", 0), 1, false, ""), { col: 0 })     // ▶ alone
 assert.deepStrictEqual(M.sideCursor(L, C("list", 0, 1), 1, false, ""), { col: 1 })        // the row's wave button
 assert.deepStrictEqual(M.sideCursor(L, C("controls", 1), 1, true, ""), { seek: 10 })
+assert.deepStrictEqual(M.sideCursor(L, C("seek", 0), -1, false, ""), { seek: -10 })      // the header seek on list tabs
+assert.deepStrictEqual(M.sideCursor(L, C("seek", 0), -1, true, ""), { seek: -30 })
+assert.deepStrictEqual(M.sideCursor(ss, C("tabs", 0), -1, false, ""), { col: 0, tab: "wave" })   // searching: the browsed tab clears the search
 assert.deepStrictEqual(M.sideCursor(quiet, C("list", 0, 0), 1, true, ""), { col: 1 })     // nothing to seek
 assert.strictEqual(M.sideCursor(L, C("", 0), 1, false, ""), null)
 // The screen changed: the same row if it is there (buttons: play/pause again), else where the window opens
@@ -201,7 +204,10 @@ assert.deepStrictEqual([M.shownMood(st, ""), M.shownMood(st, "fun"), M.shownMood
 assert.strictEqual(M.moodToSend(st, "fun"), "fun")
 assert.strictEqual(M.moodToSend(st, "calm"), null)          // stepped back to the wave's mood: nothing restarts
 assert.strictEqual(M.moodToSend(st, ""), null)
-assert.strictEqual(M.moodToSend(L, "fun"), null)            // left the wave meanwhile
+assert.strictEqual(M.moodToSend(L, "fun"), null)            // left the wave meanwhile (a tab sends it before it goes)
+// flushed at once when the window closes or typing turns the screen into search results: still the wave's list
+assert.strictEqual(M.moodToSend(at({ search: { text: "сп", results: [] } }), "fun"), "fun")
+assert.strictEqual(M.moodToSend(M.OFFLINE, "fun"), null)
 // The Wave chip goes back to the wave that plays (or is browsed) instead of restarting it as "any"
 assert.strictEqual(M.waveMood(wv({ source: { type: "likes", title: "", mood: "" } })), "calm")
 assert.strictEqual(M.waveMood(at({ play_source: { type: "likes", title: "", mood: "" } })), "calm")   // browsed wave

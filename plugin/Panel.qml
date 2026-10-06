@@ -128,6 +128,7 @@ Panel {
   function pickTab(v) {
     if (field.text !== "") field.text = ""
     if (v === root.music.source.type) return
+    root.flushMood()   // a mood just stepped to still restarts the playing wave
     if (v === "likes") root.send("playlist")
     else root.send("wave", { mood: Model.waveMood(root.music) })
   }
@@ -137,6 +138,14 @@ Panel {
     if (!m || m === root.mood) return
     root.pendingMood = m
     moodDelay.restart()
+  }
+
+  // The stepped-to mood goes out now instead of being lost: the window closes, the screen changes, another tab.
+  function flushMood() {
+    var m = moodDelay.running ? Model.moodToSend(root.music, root.pendingMood) : null
+    if (m) root.send("wave", { mood: m })
+    moodDelay.stop()   // after send: the link stays up while the timer runs
+    root.pendingMood = ""
   }
 
   function playRow(i) {
@@ -165,7 +174,7 @@ Panel {
   onHasTrackChanged: root.fixCursor()
   onPageChanged: {
     root.fixCursor()
-    if (!root.wave) { root.pendingMood = ""; moodDelay.stop() }
+    if (!root.wave) root.flushMood()
   }
   onLoggedInChanged: Qt.callLater(root.focusInput)
 
@@ -176,7 +185,7 @@ Panel {
       moveGate.reset()
       Qt.callLater(function() { if (list.contentHeight < root.listSpace) root.requestMore() })
       Qt.callLater(root.focusInput)
-    }
+    } else root.flushMood()
   }
 
   // elapsed · slider · total; dimmed while disabled (no audible track)
@@ -218,7 +227,7 @@ Panel {
 
   PointerMoveGate { id: moveGate; referenceItem: card }
   ListModel { id: rowsModel }
-  Link { id: link; wanted: root.opened }
+  Link { id: link; wanted: root.opened || moodDelay.running }   // a mood stepped to right before closing still goes out
 
   Timer { id: pendingClear; interval: 3000; onTriggered: root.pendingIndex = -1 }
 
@@ -335,7 +344,8 @@ Panel {
             Keys.onEscapePressed: {
               if (text === "") { root.close(); return }
               text = ""
-              root.placeCursor(Model.initialCursor(root.music))
+              root.setCursor("", 0)
+              root.cursorPending = true   // play/pause again, once ymd answers without the search
             }
             Keys.onPressed: function(event) {
               if (!(event.modifiers & Qt.ControlModifier) || !root.hasTrack) return
