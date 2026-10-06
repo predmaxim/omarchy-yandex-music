@@ -584,3 +584,31 @@ async def test_wave_more_and_search_more():
     assert p2.state()["has_more"] is True
     await p2.more()
     assert len(p2.results) == 4 and api2.searched[-1] == ("x", "track", 1)
+
+
+# --- audible track survives a source switch ---
+
+
+async def test_source_switch_keeps_audible_track():
+    p, api, mpv, _ = make()
+    await likes(p)
+    await p.start_wave(None)
+    s = p.state()
+    assert s["track"]["title"] == "t0" and s["playing"] is True and s["index"] == -1
+    await p.seek(20)
+    assert ("seek", 20, "absolute") in mpv.calls
+    api.liked_add = ["0"]
+    await p.like()
+    assert s["track"]["liked"] is True and p.state()["track"]["liked"] is False   # acted on t0, not the queue
+    await p.prev()
+    assert ("seek", 0, "absolute") in mpv.calls
+    await p.next()                                   # nothing marked: first queue item
+    assert p.index == 0 and p.now["id"] == "100" and p.state()["track"]["title"] == "t100"
+
+
+async def test_dislike_targets_audible_track():
+    p, api, mpv, _ = make()
+    await likes(p)
+    await p.start_wave(None)
+    await p.dislike()
+    assert api.disliked == ["0"] and p.index == 0
