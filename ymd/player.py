@@ -87,20 +87,33 @@ class Player:
         if self.station and 0 <= self.index < len(self.queue) and self.loaded:
             await self._feedback("skip", self.index)
         self.index, self.error, self.time_pos, self.last_end = i, None, 0.0, None
-        url = await self._url(i)
-        if url is None:
-            self.error = "track unavailable"
-            self.notify()
-            return
+
+        # Find a playable track, skipping unavailable ones
+        playable_i = i
+        while True:
+            url = await self._url(playable_i)
+            if url is not None:
+                break
+            playable_i += 1
+            # Fetch more tracks for stations if needed
+            if self.station and playable_i >= len(self.queue):
+                await self._fetch_station()
+            if playable_i >= len(self.queue):
+                # No playable tracks found
+                self.index, self.error = i, "track unavailable"
+                self.notify()
+                return
+
+        self.index = playable_i
         await self.mpv.command("loadfile", url, "replace")
-        self.loaded = [i]
+        self.loaded = [playable_i]
         await self._append_next()
-        if i > 0:
-            prev_url = await self._url(i - 1)
+        if playable_i > 0:
+            prev_url = await self._url(playable_i - 1)
             if prev_url is not None:
                 await self.mpv.command("loadfile", prev_url, "insert-at", 0)
-                self.loaded.insert(0, i - 1)
-        await self._feedback("trackStarted", i)
+                self.loaded.insert(0, playable_i - 1)
+        await self._feedback("trackStarted", playable_i)
         self.notify()
 
     async def reload(self):
@@ -161,7 +174,12 @@ class Player:
         if msg.get("event") != "property-change":
             return
         if name == "playlist-pos":
-            await self._on_pos(data)
+            # Read live position to avoid stale event data (e.g., from queued events during loadfile)
+            try:
+                p = await self.mpv.command("get_property", "playlist-pos")
+            except Exception:
+                p = data  # Fallback to event data if command fails
+            await self._on_pos(p)
             return
         # Non-blocking state updates for pause/idle/time-pos
         if name == "pause":

@@ -93,3 +93,23 @@ async def test_dispatcher_catches_exceptions(tmp_path):
         assert len(events) >= 2
     finally:
         await mpv.stop()
+
+async def test_on_event_awaits_command_completes(tmp_path):
+    """on_event can await mpv.command during property-change event without deadlock."""
+    command_completed = asyncio.Event()
+
+    async def on_event(e):
+        if e.get("event") == "property-change" and e.get("name") == "pause":
+            # on_event awaits a command — should complete without deadlock
+            result = await mpv.command("get_property", "idle-active")
+            assert result is True
+            command_completed.set()
+
+    mpv = Mpv(str(tmp_path / "mpv.sock"), on_event)
+    await mpv.start()
+    try:
+        await mpv.command("set_property", "pause", True)
+        # Wait for on_event's command to complete (timeout proves no deadlock)
+        await asyncio.wait_for(command_completed.wait(), timeout=3.0)
+    finally:
+        await mpv.stop()

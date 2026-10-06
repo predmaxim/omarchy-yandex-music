@@ -10,21 +10,43 @@ class FakeMpv:
     """Records commands and mirrors loadfile/remove on a fake playlist."""
     def __init__(self, on_load=None):
         self.calls, self.playlist = [], []
+        self.pos = -1  # Current playlist position
         self.on_load = on_load
 
     async def command(self, *args):
         self.calls.append(args)
         if args[0] == "loadfile":
             url, mode = args[1], args[2]
-            if mode == "replace": self.playlist = [url]
-            elif mode == "append": self.playlist.append(url)
-            elif mode == "insert-at": self.playlist.insert(args[3], url)
+            if mode == "replace":
+                self.playlist = [url]
+                self.pos = 0
+            elif mode == "append":
+                self.playlist.append(url)
+            elif mode == "insert-at":
+                k = args[3]
+                self.playlist.insert(k, url)
+                if k <= self.pos:
+                    self.pos += 1
             if self.on_load:
                 await self.on_load()
         elif args[0] == "playlist-remove":
-            self.playlist.pop(args[1])
+            k = args[1]
+            self.playlist.pop(k)
+            if k < self.pos:
+                self.pos -= 1
+            elif k == self.pos:
+                self.pos = min(self.pos, len(self.playlist) - 1)
+        elif args[0] == "playlist-next":
+            self.pos = min(self.pos + 1, len(self.playlist) - 1)
+        elif args[0] == "playlist-prev":
+            self.pos = max(self.pos - 1, 0)
         elif args[0] == "stop":
             self.playlist = []
+            self.pos = -1
+        elif args[0] == "get_property":
+            if args[1] == "playlist-pos":
+                return self.pos
+        return None
 
 
 class FakeApi:
