@@ -798,3 +798,44 @@ async def test_audible_track_switches_when_the_new_file_is_loaded():
     assert seen == [(3, "0", 50.0, 200.0)]      # marker moved; header and seek still the old track while it loads
     s = p.state()
     assert (s["track"]["id"], s["position"], s["duration"]) == ("3", 0.0, 0.0)
+
+
+def cover_file(p, url):
+    import hashlib
+    return p.covers_dir / (hashlib.sha1(url.encode()).hexdigest() + ".jpg")
+
+
+async def test_covers_cached_on_disk_and_served_as_files():
+    p, api, mpv, n = make(download=fake_download)
+    for t in api.likes:
+        t.cover_uri = f"avatars.yandex.net/{t.id}/%%"
+    seen = []
+    p.notify = lambda: seen.append((p.state()["track"] or {}).get("cover"))
+    await likes(p)
+    s = p.state()["track"]
+    big = "https://avatars.yandex.net/0/600x600"
+    assert s["cover"] == f"file://{cover_file(p, 'https://avatars.yandex.net/0/200x200')}"
+    assert s["cover_big"] == f"file://{cover_file(p, big)}" and cover_file(p, big).exists()
+    assert seen[-1].startswith("file://")                                   # the window hears about the local copy
+    assert cover_file(p, "https://avatars.yandex.net/1/600x600").exists()   # the next track's, prefetched
+    assert not list(p.covers_dir.glob("*.part"))
+
+
+async def test_cover_not_downloaded_yet_is_the_remote_url():
+    p, api, mpv, n = make()
+    for t in api.likes:
+        t.cover_uri = f"avatars.yandex.net/{t.id}/%%"
+    await likes(p)
+    s = p.state()["track"]
+    assert (s["cover"], s["cover_big"]) == ("https://avatars.yandex.net/0/200x200", "https://avatars.yandex.net/0/600x600")
+    assert not cover_file(p, "https://avatars.yandex.net/0/200x200").exists()
+
+
+def test_trim_covers_by_pattern(tmp_path):
+    import os
+    from ymd import diskcache
+    for i in range(3):
+        f = tmp_path / f"{i}.jpg"; f.write_bytes(b"x" * 10); os.utime(f, (100 + i, 100 + i))
+    diskcache.trim(tmp_path, 20, "*.jpg")
+    assert sorted(f.name for f in tmp_path.glob("*.jpg")) == ["1.jpg", "2.jpg"]
+    assert diskcache.COVERS.name == "covers" and diskcache.COVER_LIMIT == 200 << 20
