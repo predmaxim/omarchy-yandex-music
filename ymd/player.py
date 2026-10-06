@@ -132,32 +132,32 @@ class Player:
                 self.loaded.append(n)
 
     async def _on_pos(self, p):
-        async with self.lock:
-            if p is None or not 0 <= p < len(self.loaded) or self.loaded[p] == self.index:
-                return
-            old, self.index = self.index, self.loaded[p]
-            if self.station and self.last_end != "error":
-                await self._feedback("trackFinished" if self.last_end == "eof" else "skip", old)
-            self.time_pos = 0.0
-            self.last_end = None
-            if self.index > old:
-                while p > 1:
-                    await self.mpv.command("playlist-remove", 0)
-                    self.loaded.pop(0)
-                    p -= 1
-                if self.loaded[-1] == self.index:
-                    await self._append_next()
-            else:
-                while len(self.loaded) > p + 2:
-                    await self.mpv.command("playlist-remove", len(self.loaded) - 1)
-                    self.loaded.pop()
-                if p == 0 and self.index > 0:
-                    prev_url = await self._url(self.index - 1)
-                    if prev_url is not None:
-                        await self.mpv.command("loadfile", prev_url, "insert-at", 0)
-                        self.loaded.insert(0, self.index - 1)
-            await self._feedback("trackStarted", self.index)
-            self.notify()
+        """Internal; called with lock held from on_event."""
+        if p is None or not 0 <= p < len(self.loaded) or self.loaded[p] == self.index:
+            return
+        old, self.index = self.index, self.loaded[p]
+        if self.station and self.last_end != "error":
+            await self._feedback("trackFinished" if self.last_end == "eof" else "skip", old)
+        self.time_pos = 0.0
+        self.last_end = None
+        if self.index > old:
+            while p > 1:
+                await self.mpv.command("playlist-remove", 0)
+                self.loaded.pop(0)
+                p -= 1
+            if self.loaded[-1] == self.index:
+                await self._append_next()
+        else:
+            while len(self.loaded) > p + 2:
+                await self.mpv.command("playlist-remove", len(self.loaded) - 1)
+                self.loaded.pop()
+            if p == 0 and self.index > 0:
+                prev_url = await self._url(self.index - 1)
+                if prev_url is not None:
+                    await self.mpv.command("loadfile", prev_url, "insert-at", 0)
+                    self.loaded.insert(0, self.index - 1)
+        await self._feedback("trackStarted", self.index)
+        self.notify()
 
     async def _feedback(self, kind, i):
         if self.station:
@@ -174,12 +174,12 @@ class Player:
         if msg.get("event") != "property-change":
             return
         if name == "playlist-pos":
-            # Read live position to avoid stale event data (e.g., from queued events during loadfile)
-            try:
-                p = await self.mpv.command("get_property", "playlist-pos")
-            except Exception:
-                p = data  # Fallback to event data if command fails
-            await self._on_pos(p)
+            async with self.lock:
+                try:
+                    p = await self.mpv.command("get_property", "playlist-pos")
+                except Exception:
+                    return  # mpv idle/gone: nothing to slide
+                await self._on_pos(p)
             return
         # Non-blocking state updates for pause/idle/time-pos
         if name == "pause":

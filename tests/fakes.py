@@ -28,7 +28,11 @@ class FakeMpv:
                 if k <= self.pos:
                     self.pos += 1
             if self.on_load:
-                await self.on_load()
+                result = self.on_load()
+                # Handle both sync and async callbacks
+                import asyncio
+                if asyncio.iscoroutine(result):
+                    await result
         elif args[0] == "playlist-remove":
             k = args[1]
             self.playlist.pop(k)

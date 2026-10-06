@@ -197,8 +197,8 @@ async def test_race_condition_pos_during_loadfile_replace():
     assert p.index == 2  # No spurious backwards move
 
 
-async def test_best_link_none_skips_to_next_playable():
-    """When best_link returns None, skip to next playable track."""
+async def test_best_link_none_skips_multiple_unavailable():
+    """When multiple tracks are unavailable, skip to next playable."""
     p, api, mpv, _ = make(unavailable_ids={"0", "1", "2"})
     await p.start_likes()
     # Tracks 0, 1, 2 are unavailable (preview-only); track 3 is available
@@ -227,3 +227,39 @@ async def test_pos_event_reads_live_position():
     await p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0})
     # Live pos (1) maps to loaded[1]=2, so index should be 2, not affected by stale data (0)
     assert p.index == 2
+
+
+async def test_pos_event_during_play_does_not_corrupt_window():
+    """Concurrent pos event during play(2) with on_load hook must not corrupt window."""
+    import asyncio
+    p, api, mpv, _ = make()
+    await p.start_likes()
+
+    def hook():
+        asyncio.create_task(p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0}))
+
+    mpv.on_load = hook
+    await p.play(2)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert p.index == 2 and p.loaded == [1, 2, 3] and mpv.playlist == ["url1", "url2", "url3"]
+
+
+async def test_pos_event_during_start_wave_no_spurious_feedback():
+    """Wave start with pos event during loadfile has no spurious skip feedback."""
+    import asyncio
+    p, api, mpv, _ = make()
+
+    def hook():
+        asyncio.create_task(p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0}))
+
+    mpv.on_load = hook
+    await p.start_wave(None)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    await p.play(2)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    # Only the explicit skip from play(2) switching from 100 to 102
+    skip_feedbacks = [f for f in api.feedback if f[1] == "skip"]
+    assert len(skip_feedbacks) == 1 and skip_feedbacks[0][2] == "100:100"
