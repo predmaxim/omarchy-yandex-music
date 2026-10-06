@@ -426,11 +426,47 @@ Panel {
           font.pixelSize: Style.font.body
         }
 
+        // Skeleton rows while the first page loads: the window keeps its size.
+        Column {
+          id: skeleton
+          visible: root.loggedIn && root.music.loading && root.shown.length === 0
+          width: parent.width
+          height: root.listSpace
+          spacing: Style.spacing.xs
+          clip: true
+          Repeater {
+            model: 8
+            Item {
+              id: bone
+              required property int index
+              width: skeleton.width
+              height: Math.max(Style.space(50), (Style.font.body + Style.font.caption) * 1.3 + Style.spacing.rowPaddingX * 2)
+              Column {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(40)   // where a row's title starts
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(6)
+                Repeater {
+                  model: [[Style.font.body, [0.55, 0.4, 0.65, 0.35]], [Style.font.caption, [0.3, 0.22, 0.36, 0.26]]]
+                  Rectangle {
+                    required property var modelData
+                    width: skeleton.width * modelData[1][bone.index % 4]
+                    height: modelData[0] * 0.8
+                    radius: height / 2
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    opacity: 0.25
+                  }
+                }
+              }
+            }
+          }
+        }
+
         ListView {
           id: list
-          visible: root.loggedIn
+          visible: root.loggedIn && !skeleton.visible
           width: parent.width
-          height: Math.min(contentHeight, root.listSpace)
+          height: root.listSpace   // fixed: the window does not jump while lists load
           clip: true
           spacing: Style.spacing.xs
           boundsBehavior: Flickable.StopAtBounds
