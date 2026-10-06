@@ -24,5 +24,8 @@ Button {
   foreground: enabled ? panel.bar.foreground : Qt.darker(panel.bar.foreground, 1.4)
   fontFamily: panel.bar.fontFamily
   onClicked: panel.activate(name)
-  onHovered: function(h) { if (h && control.at >= 0) control.panel.setCursor("controls", control.at) }
+  HoverHandler {
+    id: hover
+    onPointChanged: if (hover.hovered && control.at >= 0) control.panel.hoverCursor(control, hover.point.position, "controls", control.at)
+  }
 }
