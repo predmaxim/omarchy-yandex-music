@@ -140,8 +140,8 @@ const W = wv(), L = at(likesTab)
 const quiet = at(Object.assign({}, likesTab, { track: null })), empty = at(Object.assign({}, likesTab, { track: null, queue: [] }))
 assert.deepStrictEqual(M.cursorRows(W), ["tabs", "mood", "seek", "controls"])
 assert.deepStrictEqual(M.cursorRows(st), ["tabs", "mood", "controls"])               // wave not started: seek disabled
-assert.deepStrictEqual(M.cursorRows(L), ["tabs", "controls", "list"])
-assert.deepStrictEqual(M.cursorRows(ss), ["tabs", "controls", "list"])               // search results
+assert.deepStrictEqual(M.cursorRows(L), ["tabs", "controls", "seek", "list"])        // header buttons, header seek
+assert.deepStrictEqual(M.cursorRows(ss), ["tabs", "controls", "seek", "list"])       // search results
 assert.deepStrictEqual(M.cursorRows(quiet), ["tabs", "list"])                         // nothing audible: no header buttons
 assert.deepStrictEqual(M.cursorRows(empty), ["tabs"])
 assert.deepStrictEqual(M.cursorRows(M.OFFLINE), [])
@@ -161,11 +161,13 @@ for (const want of [C("seek", 0), C("mood", 3), C("tabs", 0), C("tabs", 0)]) ass
 assert.deepStrictEqual(M.moveCursor(W, C("tabs", 0), 1, "fun"), C("mood", 1))      // the mood just stepped to
 assert.deepStrictEqual(M.moveCursor(W, C("controls", 4), 1, ""), C("controls", 4))
 assert.deepStrictEqual(M.moveCursor(st, C("controls", 0), -1, ""), C("mood", 3))    // no seek row before the wave starts
-// list tabs: ↑ from the first row to the header buttons, then the tabs; ↓ back; the last row holds
-assert.deepStrictEqual(M.moveCursor(L, C("list", 1, 0), -1, ""), C("controls", 1))
+// list tabs: ↑ from the first row to the header seek, the header buttons, then the tabs; ↓ back; the last row holds
+assert.deepStrictEqual(M.moveCursor(L, C("list", 1, 0), -1, ""), C("seek", 0))
+assert.deepStrictEqual(M.moveCursor(L, C("seek", 0), -1, ""), C("controls", 1))
 assert.deepStrictEqual(M.moveCursor(L, C("controls", 3), -1, ""), C("tabs", 1))
 assert.deepStrictEqual(M.moveCursor(L, C("tabs", 0), 1, ""), C("controls", 1))
-assert.deepStrictEqual(M.moveCursor(L, C("controls", 4), 1, ""), C("list", 0, 0))
+assert.deepStrictEqual(M.moveCursor(L, C("controls", 4), 1, ""), C("seek", 0))
+assert.deepStrictEqual(M.moveCursor(L, C("seek", 0), 1, ""), C("list", 0, 0))
 assert.deepStrictEqual(M.moveCursor(L, C("list", 0, 0), 1, ""), C("list", 0, 1))
 assert.deepStrictEqual(M.moveCursor(L, C("list", 0, 1), 1, ""), C("list", 0, 1))
 assert.deepStrictEqual(M.moveCursor(quiet, C("list", 0, 0), -1, ""), C("tabs", 1))   // nothing audible: straight to the tabs
@@ -196,6 +198,7 @@ assert.deepStrictEqual(M.screenCursor(W, C("controls", 0)), C("controls", 2))   
 assert.deepStrictEqual(M.screenCursor(L, C("controls", 2)), C("controls", 1))
 assert.deepStrictEqual(M.screenCursor(L, C("mood", 2)), C("controls", 1))
 assert.deepStrictEqual(M.screenCursor(W, C("list", 0, 5)), C("controls", 2))
+assert.deepStrictEqual(M.screenCursor(L, C("seek", 0)), C("seek", 0))                     // wave seek → header seek
 assert.deepStrictEqual(M.screenCursor(L, C("tabs", 1)), C("tabs", 1))
 assert.deepStrictEqual(M.screenCursor(W, C("", 0)), C("", 0))
 // Moods: the stepped-to one shows at once and is sent MOOD_DELAY after the last step, unless it is the wave's already
