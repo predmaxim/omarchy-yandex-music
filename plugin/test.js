@@ -3,7 +3,7 @@ const fs = require("fs")
 const assert = require("assert")
 const load = (file, names) =>
   new Function(fs.readFileSync(__dirname + "/" + file, "utf8").replace(".pragma library", "") + "; return { " + names + " }")()
-const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD, syncRows, waveView, waveControls, controlCmd, control, waveMood, moodLabel, SOURCE_ROW, controlEnabled")
+const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD, syncRows, waveView, waveControls, controlCmd, control, waveMood, moodLabel, SOURCE_ROW, controlEnabled, initialCursor")
 const I = load("I18n.js", "TABLES, translator")
 const ru = I.translator("ru")
 
@@ -134,6 +134,15 @@ for (const n of M.HEAD) assert.strictEqual(M.controlEnabled(n, st), true, n)
 for (const n of M.HEAD) assert.strictEqual(M.controlEnabled(n, at({ track: null })), false, n)
 assert.strictEqual(M.controlEnabled("start", at({ track: null })), true)
 assert.strictEqual(M.controlEnabled("toggle", M.OFFLINE), false)
+// Where the cursor starts when the window opens: on play/pause (▶ on the idle wave screen);
+// with nothing audible on a list tab, on its first row (Enter plays it)
+const likesTab = { source: { type: "likes", title: "", mood: "" }, play_source: { type: "likes", title: "", mood: "" } }
+assert.deepStrictEqual(M.initialCursor(wv()), { head: 2, cur: -1 })
+assert.deepStrictEqual(M.initialCursor(st), { head: 0, cur: -1 })                       // wave not started: ▶
+assert.deepStrictEqual(M.initialCursor(at(likesTab)), { head: M.HEAD.indexOf("toggle"), cur: -1 })
+assert.deepStrictEqual(M.initialCursor(at(Object.assign({}, likesTab, { track: null }))), { head: -1, cur: 0 })
+assert.deepStrictEqual(M.initialCursor(at(Object.assign({}, likesTab, { track: null, queue: [] }))), { head: -1, cur: -1 })
+assert.deepStrictEqual(M.initialCursor(M.OFFLINE), { head: -1, cur: -1 })
 // The Wave chip goes back to the wave that plays (or is browsed) instead of restarting it as "any"
 assert.strictEqual(M.waveMood(wv({ source: { type: "likes", title: "", mood: "" } })), "calm")
 assert.strictEqual(M.waveMood(at({ play_source: { type: "likes", title: "", mood: "" } })), "calm")   // browsed wave
