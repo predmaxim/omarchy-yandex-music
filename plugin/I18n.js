@@ -15,7 +15,7 @@ var TABLES = {
     "login code expired, try again": "Код входа истёк, попробуйте снова",
     "nothing to play": "Нечего играть", "track unavailable": "Трек недоступен",
     "Any": "Любое", "Fun": "Весёлое", "Energetic": "Бодрое", "Calm": "Спокойное", "Sad": "Грустное",
-    "Like": "Нравится", "Dislike": "Не нравится", "Wave by this track": "Волна по треку",
+    "Like": "Нравится", "Previous": "Предыдущий", "Next": "Следующий", "Play": "Играть", "Pause": "Пауза", "Dislike": "Не нравится", "Wave by this track": "Волна по треку",
     "Log in": "Войти",
     "Open ya.ru/device and enter the code, or scan the QR code with your phone": "Откройте ya.ru/device и введите код или отсканируйте QR телефоном",
     "Waiting for confirmation…": "Жду подтверждения…",

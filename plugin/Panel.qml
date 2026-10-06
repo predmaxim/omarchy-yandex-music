@@ -28,6 +28,7 @@ Panel {
   property bool btnFocus: false
   property int head: -1
   property int askedAt: -1        // list length at the last "more" request
+  property string sourceSig: ""
   property int seenIndex: -1
   property int pendingIndex: -1   // row clicked, shown as current until ymd confirms
   property real pos: 0            // seek bar position, interpolated between state lines
@@ -45,6 +46,8 @@ Panel {
     if (sig !== root.shownSig) { root.shownSig = sig; root.shown = r }
   }
   onMusicChanged: {
+    var sig = JSON.stringify(root.music.source) + (root.music.search ? root.music.search.text : "")
+    if (sig !== root.sourceSig) { root.sourceSig = sig; root.askedAt = -1 }
     if (root.pendingIndex >= 0 && root.music.index !== root.seenIndex) root.pendingIndex = -1   // ymd answered
     root.seenIndex = root.music.index
     root.pos = root.music.position || 0
@@ -89,14 +92,14 @@ Panel {
 
   function side(dx, event) {
     if ((event.modifiers & Qt.ShiftModifier) && root.hasTrack) { root.seekTo(root.pos + dx * 10); return }
-    if (root.head >= 0) { root.head = Math.max(0, Math.min(1, root.head + dx)); return }
+    if (root.head >= 0) { root.head = Math.max(0, Math.min(Model.HEAD.length - 1, root.head + dx)); return }
     if (root.cur >= 0) { root.btnFocus = dx > 0; return }
     event.accepted = false
   }
 
   function enter(event) {
     var inList = root.cur >= 0 && root.cur < root.shown.length
-    if (root.head >= 0) { if (root.hasTrack) root.send(root.head === 0 ? "dislike" : "like") }
+    if (root.head >= 0) { if (root.hasTrack) root.send(Model.HEAD[root.head]) }
     else if (inList && root.btnFocus) root.waveFrom(root.cur)
     else if (inList) root.playRow(root.cur)
     else event.accepted = false
@@ -222,7 +225,11 @@ Panel {
             visible: root.loggedIn && !!root.music.track
             spacing: Style.space(10)
             Repeater {
-              model: [{ icon: "\u{F0514}", tip: "Dislike", cmd: "dislike" },
+              model: [{ icon: Model.ICONS.prev, tip: "Previous", cmd: "prev" },
+                      { icon: root.music.playing ? Model.ICONS.paused : Model.ICONS.play,
+                        tip: root.music.playing ? "Pause" : "Play", cmd: "toggle" },
+                      { icon: Model.ICONS.next, tip: "Next", cmd: "next" },
+                      { icon: "\u{F0514}", tip: "Dislike", cmd: "dislike" },
                       { icon: root.music.track && root.music.track.liked ? "\u{F02D1}" : "\u{F02D5}", tip: "Like", cmd: "like" }]
               Button {
                 required property var modelData
