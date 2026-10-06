@@ -20,6 +20,7 @@ FADE_S = 3
 FADE_IN = f"af=lavfi=[afade=t=in:d={FADE_S}]"  # per-file: mpv resets it with the next file
 URL_TTL = 600
 PAGE = 20
+MAX_STATION_ROWS = 100  # the list stops growing from scrolling here
 IDS_TTL = 300
 
 
@@ -95,7 +96,10 @@ class Player:
                 if self.search_text:
                     self.search_page += 1
                     resp = await self.api.search(self.search_text, type_="track", page=self.search_page)
-                    self.results += [tracks.info(t) for t in (resp.tracks.results or [])] if resp and resp.tracks else []
+                    page = [tracks.info(t) for t in (resp.tracks.results or [])] if resp and resp.tracks else []
+                    self.results += page
+                    if not page:
+                        self.search_total = len(self.results)
                 else:
                     await self._refill()
             finally:
@@ -106,7 +110,7 @@ class Player:
         if self.search_text:
             return len(self.results) < self.search_total
         if self.station:
-            return True
+            return len(self.queue) < MAX_STATION_ROWS
         return self.source["type"] == "likes" and self.like_off < len(self.like_ids)
 
     async def start_wave(self, mood):
@@ -186,7 +190,9 @@ class Player:
         return f if f.exists() else None
 
     async def _url(self, i):
-        tid = self.queue[i]["id"]
+        return await self._url_for(self.queue[i]["id"])
+
+    async def _url_for(self, tid):
         if f := self._local(tid):
             os.utime(f)  # LRU: touch on play
             return str(f)
@@ -379,10 +385,14 @@ class Player:
                 self.urls.pop(tid, None)  # stale link: refetch next time
                 if f := self._local(tid):
                     f.unlink(missing_ok=True)  # maybe a bad copy
-            if self.last_end == "eof" and self.loaded and self.loaded[-1] == self.index:
-                async with self.lock:  # no next entry in mpv (load failed): advance ourselves
-                    if self.loaded and self.loaded[-1] == self.index and self.index + 1 < len(self.queue):
-                        await self._step(1, "trackFinished")
+            if self.last_end == "eof" and self.index >= 0:
+                async with self.lock:  # mpv has nothing after this track (or went idle): advance ourselves
+                    n = self.index + 1
+                    edge = self.loaded[-1:] == [self.index]
+                    if edge and n >= len(self.queue):
+                        await self._refill()
+                    if n < len(self.queue) and (edge or await self._idle()):
+                        await self._play(n, "trackFinished")
             return
         if msg.get("event") != "property-change":
             return
@@ -410,12 +420,34 @@ class Player:
             self.duration = data or 0.0
         self.notify()
 
+    async def _idle(self):
+        try:
+            return bool(await self.mpv.command("get_property", "idle-active"))
+        except Exception:
+            return False
+
     async def toggle(self):
         async with self.lock:
-            if not self.loaded and not self.playing and self.queue:
+            if not await self._idle():
+                await self.mpv.command("cycle", "pause")  # mpv still holds a track
+            elif self.now:
+                await self._resume_now()
+            elif self.queue:
                 await self._play(max(self.index, 0))
-            else:
-                await self.mpv.command("cycle", "pause")
+
+    async def _resume_now(self):
+        """mpv is idle: play the audible track again, from the queue if it is in it."""
+        for i, t in enumerate(self.queue):
+            if t["id"] == self.now["id"]:
+                return await self._play(i)
+        url = await self._url_for(self.now["id"])
+        if url is not None:
+            self.gen += 1
+            self.time_pos, self.duration, self.faded, self.loaded = 0.0, 0.0, False, []
+            await self._load(url, "replace")
+            await self.mpv.command("set_property", "pause", False)
+            self.playing = True
+            self.notify()
 
     async def stop(self):
         async with self.lock:

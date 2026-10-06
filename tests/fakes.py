@@ -53,6 +53,8 @@ class FakeMpv:
         elif args[0] == "get_property":
             if args[1] == "playlist-pos":
                 return self.pos
+            if args[1] == "idle-active":
+                return not self.playlist
         return None
 
 
