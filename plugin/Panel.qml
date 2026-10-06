@@ -59,7 +59,7 @@ Panel {
     }
     if (root.pendingIndex >= 0 && root.music.index !== root.seenIndex) root.pendingIndex = -1   // ymd answered
     root.seenIndex = root.music.index
-    root.pos = root.music.position || 0
+    root.pos = Model.position(root.music, 0)   // 0 while the new file has no length yet
     root.posStamp = Date.now()
     refreshRows()
     if (root.cursorPending && root.music.running) {
