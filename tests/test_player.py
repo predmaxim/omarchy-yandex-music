@@ -1,11 +1,32 @@
+import tempfile
+from pathlib import Path
+import pytest
 from types import SimpleNamespace as NS
 from ymd.player import Player, WAVE
 from tests.fakes import FakeApi, FakeMpv
 
 
-def make(**kw):
+def make(download=None, **kw):
     api, mpv, n = FakeApi(**kw), FakeMpv(), []
-    return Player(api, mpv, lambda: n.append(1)), api, mpv, n
+    p = Player(api, mpv, lambda: n.append(1), cache_dir=Path(tempfile.mkdtemp()) / "tracks",
+               download=download or offline)
+    return p, api, mpv, n
+
+
+def offline(url, path):
+    raise OSError("offline")
+
+
+def fake_download(url, path):
+    Path(path).write_bytes(b"x" * 10)
+
+
+async def likes(p):
+    await p.start_likes(); await p.play(0); await p.settle()
+
+
+async def wave(p, mood):
+    await p.start_wave(mood); await p.play(0); await p.settle()
 
 
 async def pos(p, i):
@@ -16,15 +37,15 @@ async def pos(p, i):
 
 async def test_likes_loads_window():
     p, api, mpv, _ = make()
-    await p.start_likes()
+    await likes(p)
     assert p.index == 0 and mpv.playlist == ["url0", "url1"] and p.loaded == [0, 1]
     assert p.state()["source"] == {"type": "likes", "title": "", "mood": ""}
 
 
 async def test_play_middle_inserts_previous():
     p, api, mpv, _ = make()
-    await p.start_likes()
-    await p.play(2)
+    await likes(p)
+    await p.play(2); await p.settle()
     assert mpv.playlist == ["url1", "url2", "url3"] and p.loaded == [1, 2, 3]
     await pos(p, 1)                      # mpv reports the shift after insert-at: no-op
     assert p.index == 2
@@ -32,21 +53,21 @@ async def test_play_middle_inserts_previous():
 
 async def test_next_from_media_keys_slides_window():
     p, api, mpv, _ = make()
-    await p.start_likes(); await p.play(2)
+    await likes(p); await p.play(2); await p.settle()
     await pos(p, 2)                      # mpv-mpris "next"
     assert p.index == 3 and mpv.playlist == ["url2", "url3", "url4"] and p.loaded == [2, 3, 4]
 
 
 async def test_prev_from_media_keys_slides_back():
     p, api, mpv, _ = make()
-    await p.start_likes(); await p.play(2)
+    await likes(p); await p.play(2); await p.settle()
     await pos(p, 0)
     assert p.index == 1 and mpv.playlist == ["url0", "url1", "url2"] and p.loaded == [0, 1, 2]
 
 
 async def test_next_at_end_of_likes_keeps_last():
     p, api, mpv, _ = make(likes=2)
-    await p.start_likes(); await p.play(1)
+    await likes(p); await p.play(1); await p.settle()
     assert mpv.playlist == ["url0", "url1"] and p.loaded == [0, 1]
     await pos(p, 2)                      # out of range: ignored
     assert p.index == 1
@@ -54,7 +75,7 @@ async def test_next_at_end_of_likes_keeps_last():
 
 async def test_wave_with_mood_feedback_and_skip():
     p, api, mpv, _ = make()
-    await p.start_wave("calm")
+    await wave(p, "calm")
     assert api.settings == [(WAVE, "calm", "default")]
     assert api.feedback[:2] == [(WAVE, "radioStarted", None), (WAVE, "trackStarted", "100:100")]
     await p.on_event({"event": "end-file", "reason": "stop"})
@@ -64,7 +85,7 @@ async def test_wave_with_mood_feedback_and_skip():
 
 async def test_wave_eof_sends_finished():
     p, api, mpv, _ = make()
-    await p.start_wave(None)
+    await wave(p, None)
     assert api.settings == []
     await p.on_event({"event": "property-change", "name": "time-pos", "data": 180.0})
     await p.on_event({"event": "end-file", "reason": "eof"})
@@ -74,7 +95,7 @@ async def test_wave_eof_sends_finished():
 
 async def test_error_end_does_not_send_finished():
     p, api, mpv, _ = make()
-    await p.start_wave(None)
+    await wave(p, None)
     await p.on_event({"event": "end-file", "reason": "error"})
     await pos(p, 1)
     kinds = [f[1] for f in api.feedback]
@@ -83,7 +104,7 @@ async def test_error_end_does_not_send_finished():
 
 async def test_wave_refills_when_near_end():
     p, api, mpv, _ = make()
-    await p.start_wave(None)
+    await wave(p, None)
     for i in range(1, 4):
         await pos(p, min(i, 2))
     assert api.rotor_calls[-1] == (WAVE, "104")
@@ -92,7 +113,7 @@ async def test_wave_refills_when_near_end():
 
 async def test_track_wave_uses_track_station_and_title():
     p, api, mpv, _ = make()
-    await p.start_likes()
+    await likes(p)
     await p.start_track_wave("3")
     assert api.rotor_calls[0] == ("track:3", None)
     assert p.state()["source"] == {"type": "track-wave", "title": "t3", "mood": ""}
@@ -100,7 +121,7 @@ async def test_track_wave_uses_track_station_and_title():
 
 async def test_like_toggles_and_dislike_in_wave_skips():
     p, api, mpv, _ = make()
-    await p.start_wave(None)
+    await wave(p, None)
     await p.like()
     assert api.liked_add == ["100"] and p.state()["track"]["liked"] is True
     await p.like()
@@ -114,7 +135,7 @@ async def test_search_and_play_from_results():
     await p.search("кино")
     assert api.searched == [("кино", "track")]
     assert [r["id"] for r in p.state()["search"]["results"]] == ["900", "901"]
-    await p.play_search(1)
+    await p.play_search(1); await p.settle()
     assert p.state()["source"] == {"type": "search", "title": "кино", "mood": ""}
     assert p.queue[p.index]["id"] == "901"
 
@@ -127,15 +148,15 @@ async def test_empty_search_clears():
 
 async def test_toggle_when_stopped_replays_current():
     p, api, mpv, _ = make()
-    await p.start_likes(); await p.stop()
+    await likes(p); await p.stop()
     assert mpv.playlist == []
-    await p.toggle()
+    await p.toggle(); await p.settle()
     assert mpv.playlist == ["url0", "url1"]
 
 
 async def test_state_marks_playing_track():
     p, api, mpv, _ = make()
-    await p.start_likes()
+    await likes(p)
     await p.on_event({"event": "property-change", "name": "pause", "data": False})
     s = p.state()
     assert s["index"] == 0 and s["playing"] is True and s["track"]["title"] == "t0"
@@ -173,7 +194,7 @@ async def test_dislike_with_no_current_track():
 async def test_best_link_none_skips_to_next_playable():
     """When best_link returns None, skip to next playable track."""
     p, api, mpv, _ = make(unavailable_ids={"0"})
-    await p.start_likes()
+    await likes(p)
     # Track 0 unavailable, skips to track 1
     assert p.index == 1 and p.loaded == [1, 2]
     assert mpv.playlist == ["url1", "url2"]
@@ -183,7 +204,7 @@ async def test_best_link_none_skips_to_next_playable():
 async def test_best_link_none_skips_multiple_unavailable():
     """When multiple tracks are unavailable, skip to next playable."""
     p, api, mpv, _ = make(unavailable_ids={"0", "1", "2"})
-    await p.start_likes()
+    await likes(p)
     # Tracks 0, 1, 2 are unavailable (preview-only); track 3 is available
     assert p.index == 3 and p.loaded == [3, 4]
     assert mpv.playlist == ["url3", "url4"]
@@ -193,7 +214,7 @@ async def test_best_link_none_skips_multiple_unavailable():
 async def test_best_link_all_unavailable_sets_error():
     """When all remaining tracks are unavailable, set error."""
     p, api, mpv, _ = make(likes=2, unavailable_ids={"0", "1"})
-    await p.start_likes()
+    await likes(p)
     # All tracks unavailable
     assert p.error == "track unavailable" and mpv.playlist == []
 
@@ -217,9 +238,9 @@ def interleave_once(p):
 async def test_pos_event_during_play_does_not_corrupt_window():
     """pos event mid-play() must read mpv's position under the lock, after the window is final."""
     p, api, mpv, _ = make()
-    await p.start_likes()
+    await likes(p)
     mpv.on_load = interleave_once(p)
-    await p.play(2)
+    await p.play(2); await p.settle()
     import asyncio
     await asyncio.sleep(0)
     assert p.index == 2 and p.loaded == [1, 2, 3] and mpv.playlist == ["url1", "url2", "url3"]
@@ -230,9 +251,9 @@ async def test_pos_event_during_start_wave_no_spurious_feedback():
     import asyncio
     p, api, mpv, _ = make()
     mpv.on_load = interleave_once(p)
-    await p.start_wave(None)
+    await wave(p, None)
     await asyncio.sleep(0)
-    await p.play(2)
+    await p.play(2); await p.settle()
     await asyncio.sleep(0)
     skips = [f for f in api.feedback if f[1] == "skip"]
     assert skips == [(WAVE, "skip", "100:100")]
@@ -240,42 +261,194 @@ async def test_pos_event_during_start_wave_no_spurious_feedback():
 
 async def test_wave_language_any():
     p, api, mpv, _ = make()
-    await p.start_wave("calm")
+    await wave(p, "calm")
     assert api.languages == ["any"]
 
 
 async def test_play_unpauses():
     p, api, mpv, _ = make()
-    await p.start_likes()
+    await likes(p)
     assert ("set_property", "pause", False) in mpv.calls
 
 
 async def test_play_out_of_range_is_error():
     p, api, mpv, _ = make()
-    await p.start_likes()
+    await likes(p)
     for i in (-1, 5):
         mpv.calls.clear()
-        await p.play(i)
+        await p.play(i); await p.settle()
         assert p.index == 0 and p.error == "nothing to play" and not mpv.calls
 
 
 async def test_empty_likes_and_rotor():
     p, api, mpv, _ = make(likes=0)
-    await p.start_likes()
+    await likes(p)
     assert p.error == "nothing to play" and not mpv.calls
     p, api, mpv, _ = make(wave_batches=[[]])
-    await p.start_wave(None)
+    await wave(p, None)
     assert p.error == "nothing to play"
     p, api, mpv, _ = make()
     async def none(*a, **k): return None
     api.rotor_station_tracks = none
-    await p.start_wave(None)
+    await wave(p, None)
     assert p.error == "nothing to play"
 
 
 async def test_reload_sends_no_skip():
     p, api, mpv, _ = make()
-    await p.start_wave(None)
+    await wave(p, None)
     api.feedback.clear()
-    await p.reload()
+    await p.reload(); await p.settle()
     assert [f[1] for f in api.feedback] == ["trackStarted"]
+
+
+# --- v2 ---
+
+
+async def test_play_sets_playing_without_pause_event():
+    p, api, mpv, _ = make()
+    await likes(p)
+    assert p.state()["playing"] is True
+    await p.stop()
+    assert p.state()["playing"] is False
+
+
+async def test_feedback_zero_seconds_sends_positive():
+    p, api, mpv, _ = make()
+    await wave(p, None)
+    await p.play(1); await p.settle()          # time_pos is 0.0 here
+    skip = [kw for (_, k, _), kw in zip(api.feedback, api.feedback_kw) if k == "skip"]
+    assert skip and skip[0]["total_played_seconds"] == 0.1
+
+
+async def test_feedback_failure_never_breaks_play():
+    p, api, mpv, _ = make()
+    await wave(p, None)
+    api.feedback_error = RuntimeError("Some parts were not parsed")
+    await p.play(2); await p.settle()
+    assert p.index == 2 and p.error is None and mpv.playlist[1] == "url102"
+
+
+async def test_failed_play_keeps_marker_on_audible_track():
+    p, api, mpv, _ = make()
+    await likes(p)
+    async def boom(*a, **k): raise OSError("net")
+    api.tracks_download_info = boom
+    with pytest.raises(OSError):
+        await p.play(3)
+    assert p.index == 0
+    unavailable, _a, _b, _c = make(likes=2, unavailable_ids={"1"})
+    await unavailable.start_likes(); await unavailable.play(0); await unavailable.settle()
+    await unavailable.play(1)
+    assert unavailable.index == 0 and unavailable.error == "track unavailable"
+
+
+async def test_play_notifies_before_network():
+    p, api, mpv, n = make()
+    await p.start_likes()
+    seen = []
+    orig = api.tracks_download_info
+    async def spy(*a, **k):
+        seen.append((p.index, len(n))); return await orig(*a, **k)
+    api.tracks_download_info = spy
+    notified = len(n)
+    await p.play(2)
+    assert seen[0] == (2, notified + 1)      # index set and notified first
+    assert mpv.playlist == ["url2"]          # neighbours not loaded yet
+    await p.settle()
+    assert mpv.playlist == ["url1", "url2", "url3"]
+
+
+async def test_sources_do_not_autoplay():
+    p, api, mpv, _ = make()
+    await p.start_likes(); await p.settle()
+    assert mpv.calls == [] and p.index == -1 and len(p.queue) == 5
+    await p.start_wave("calm"); await p.settle()
+    assert mpv.calls == [] and api.feedback == [] and len(p.queue) == 5
+    await p.play(0); await p.settle()           # radioStarted with the first play
+    assert [f[1] for f in api.feedback] == ["radioStarted", "trackStarted"]
+
+
+async def test_new_source_keeps_playing_track_alone():
+    p, api, mpv, _ = make()
+    await likes(p)
+    await p.start_wave(None)
+    assert mpv.playlist == ["url0"] and p.loaded == [] and p.playing is True
+
+
+async def test_track_wave_plays_immediately():
+    p, api, mpv, _ = make()
+    await p.start_track_wave("3")
+    assert mpv.playlist[0] == "url100"
+
+
+async def test_url_cache_and_error_drops_it():
+    p, api, mpv, _ = make()
+    calls = []
+    orig = api.tracks_download_info
+    async def spy(tid, **k):
+        calls.append(tid); return await orig(tid, **k)
+    api.tracks_download_info = spy
+    await likes(p)
+    n = len(calls)
+    await p.play(0); await p.settle()
+    assert len(calls) == n                      # all links cached
+    await p.on_event({"event": "end-file", "reason": "error"})
+    await p.play(0); await p.settle()
+    assert calls.count("0") == 2                # refetched after the error
+
+
+async def test_prefetches_index_plus_two():
+    p, api, mpv, _ = make()
+    await likes(p)
+    assert "2" in p.urls
+
+
+async def test_state_position_duration_and_seek():
+    p, api, mpv, n = make()
+    await likes(p)
+    await p.on_event({"event": "property-change", "name": "duration", "data": 200.0})
+    await p.on_event({"event": "property-change", "name": "time-pos", "data": 12.5})
+    assert p.state()["position"] == 12.5 and p.state()["duration"] == 200.0
+    await p.seek(50)
+    assert ("seek", 50, "absolute") in mpv.calls and p.state()["position"] == 50
+
+
+async def test_fade_in_option_and_fade_out_once():
+    p, api, mpv, _ = make()
+    await likes(p)
+    assert ("loadfile", "url0", "replace", -1, "af=lavfi=[afade=t=in:d=3]") in mpv.calls
+    await p.on_event({"event": "property-change", "name": "duration", "data": 200.0})
+    for t in (100.0, 197.0, 198.0):
+        await p.on_event({"event": "property-change", "name": "time-pos", "data": t})
+    fo = [c for c in mpv.calls if c[:2] == ("af", "add")]
+    assert len(fo) == 1 and "st=197.0" in fo[0][2]
+    await pos(p, 1)                             # next track resets
+    await p.on_event({"event": "property-change", "name": "duration", "data": 5.0})
+    await p.on_event({"event": "property-change", "name": "time-pos", "data": 4.0})
+    assert len([c for c in mpv.calls if c[:2] == ("af", "add")]) == 1   # short track: no fade
+
+
+async def test_liked_track_cached_and_reused(tmp_path):
+    p, api, mpv, _ = make(download=fake_download)
+    await likes(p)
+    f = p.cache_dir / "0.mp3"
+    assert f.exists() and not list(p.cache_dir.glob("*.part"))
+    await p.play(0); await p.settle()
+    assert mpv.playlist[0] == str(f)
+
+
+async def test_unliked_not_cached():
+    p, api, mpv, _ = make(download=fake_download)
+    await p.search("x"); await p.play_search(0); await p.settle()
+    assert not p.cache_dir.exists() or not list(p.cache_dir.glob("*"))
+
+
+def test_trim_removes_least_recently_used(tmp_path):
+    import os
+    from ymd import diskcache
+    for i in range(3):
+        f = tmp_path / f"{i}.mp3"; f.write_bytes(b"x" * 10); os.utime(f, (100 + i, 100 + i))
+    os.utime(tmp_path / "0.mp3", (200, 200))     # 0 was played last
+    diskcache.trim(tmp_path, limit=20)
+    assert sorted(f.name for f in tmp_path.glob("*.mp3")) == ["0.mp3", "2.mp3"]

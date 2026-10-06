@@ -13,7 +13,7 @@ import os
 logger = logging.getLogger("ymd")
 
 MPRIS = "/usr/lib/mpv-mpris/mpris.so"
-OBSERVED = ["playlist-pos", "pause", "time-pos", "idle-active"]
+OBSERVED = ["playlist-pos", "pause", "time-pos", "idle-active", "duration"]
 
 
 class MpvError(Exception):
@@ -47,6 +47,7 @@ class Mpv:
         if os.path.exists(self.sock_path):
             os.unlink(self.sock_path)
         args = ["mpv", "--idle=yes", "--no-video", "--no-config", "--no-terminal",
+                "--prefetch-playlist=yes", "--cache=yes", "--demuxer-max-bytes=64MiB", "--gapless-audio=no",
                 f"--input-ipc-server={self.sock_path}", "--title=ymd"]
         if os.path.exists(MPRIS):
             args.append(f"--script={MPRIS}")

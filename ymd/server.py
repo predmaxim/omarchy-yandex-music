@@ -65,7 +65,7 @@ class Daemon:
     def state(self):
         base = self.player.state() if self.player else {
             "source": {"type": "none", "title": "", "mood": ""}, "moods": [], "playing": False, "track": None,
-            "queue": [], "index": -1, "search": {"text": "", "results": []}, "error": None}
+            "queue": [], "index": -1, "position": 0.0, "duration": 0.0, "search": {"text": "", "results": []}, "error": None}
         return dict(base, auth=self.auth, login=self.login_info, error=self.error or base["error"])
 
     def broadcast(self):
@@ -131,6 +131,7 @@ class Daemon:
                 p = self.player
                 actions = {
                     "play": lambda: p.play(int(msg["index"])),
+                    "seek": lambda: p.seek(float(msg["seconds"])),
                     "toggle": p.toggle, "stop": p.stop, "next": p.next, "prev": p.prev,
                     "like": p.like, "dislike": p.dislike,
                     "wave": lambda: p.start_wave(msg.get("mood")),
