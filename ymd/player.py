@@ -31,13 +31,16 @@ class Player:
         tl = await self.api.users_likes_tracks()
         self.liked = {str(t.id) for t in tl.tracks}
         async with self.lock:
-            self.station, self.queue = None, [tracks.info(t) for t in await tl.fetch_tracks_async()]
+            queue = [tracks.info(t) for t in await tl.fetch_tracks_async()]
+            if not queue:
+                self.error = "nothing to play"; self.notify(); return
+            self.station, self.queue = None, queue
             self.source = {"type": "likes", "title": "", "mood": ""}
             await self._play(0)
 
     async def start_wave(self, mood):
         if mood:
-            await self.api.rotor_station_settings2(WAVE, mood, "default")
+            await self.api.rotor_station_settings2(WAVE, mood, "default", language="any")
         await self._start_station(WAVE, {"type": "wave", "title": "", "mood": mood or ""})
 
     async def start_track_wave(self, track_id):
@@ -49,13 +52,15 @@ class Player:
         async with self.lock:
             self.station, self.queue, self.source, self.loaded = station, [], source, []
             await self._fetch_station()
+            if not self.queue:
+                self.error = "nothing to play"; self.notify(); return
             await self.api.rotor_station_feedback(station, "radioStarted")
             await self._play(0)
 
     async def _fetch_station(self):
         last = self.queue[-1]["id"] if self.queue else None
         r = await self.api.rotor_station_tracks(self.station, queue=last)
-        self.queue += [tracks.info(s.track) for s in r.sequence if s.track]
+        self.queue += [tracks.info(s.track) for s in (r.sequence if r else None) or [] if s.track]
 
     async def search(self, text):
         async with self.lock:
@@ -84,6 +89,8 @@ class Player:
 
     async def _play(self, i):
         """Internal play without lock; must be called while holding self.lock."""
+        if not 0 <= i < len(self.queue):
+            self.error = "nothing to play"; self.notify(); return
         if self.station and 0 <= self.index < len(self.queue) and self.loaded:
             await self._feedback("skip", self.index)
         self.index, self.error, self.time_pos, self.last_end = i, None, 0.0, None
@@ -106,6 +113,7 @@ class Player:
 
         self.index = playable_i
         await self.mpv.command("loadfile", url, "replace")
+        await self.mpv.command("set_property", "pause", False)  # pause is global in mpv
         self.loaded = [playable_i]
         await self._append_next()
         if playable_i > 0:
@@ -119,6 +127,7 @@ class Player:
     async def reload(self):
         """mpv restarted: load the current track again."""
         if 0 <= self.index < len(self.queue):
+            self.loaded = []  # no skip feedback: the old mpv playlist is gone
             await self.play(self.index)
 
     async def _append_next(self):

@@ -51,16 +51,23 @@ class Mpv:
         if os.path.exists(MPRIS):
             args.append(f"--script={MPRIS}")
         self.proc = await asyncio.create_subprocess_exec(*args)
-        for _ in range(100):
-            if os.path.exists(self.sock_path):
-                break
-            await asyncio.sleep(0.05)
-        self.reader, self.writer = await asyncio.open_unix_connection(self.sock_path)
-        self.event_queue = asyncio.Queue()
-        self.task = asyncio.create_task(self._read())
-        self.dispatcher = asyncio.create_task(self._dispatch_events())
-        for n, name in enumerate(OBSERVED, 1):
-            await self.command("observe_property", n, name)
+        try:
+            for _ in range(100):
+                if os.path.exists(self.sock_path):
+                    break
+                await asyncio.sleep(0.05)
+            self.reader, self.writer = await asyncio.open_unix_connection(self.sock_path)
+            self.event_queue = asyncio.Queue()
+            self.task = asyncio.create_task(self._read())
+            self.dispatcher = asyncio.create_task(self._dispatch_events())
+            for n, name in enumerate(OBSERVED, 1):
+                await self.command("observe_property", n, name)
+        except BaseException:
+            # a half-started mpv would register a second MPRIS "mpv" and steal media keys
+            if self.proc.returncode is None:
+                self.proc.kill()
+                await self.proc.wait()
+            raise
 
     async def command(self, *args):
         if not self.task or self.task.done():

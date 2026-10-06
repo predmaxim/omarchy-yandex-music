@@ -46,7 +46,7 @@ function sourceName(src, tr) {
 }
 
 function subtitle(st, tr) {
-  if (st.error) return tr("Error: %1", st.error)
+  if (st.error) return tr("Error: %1", tr(st.error))
   var parts = [st.track ? st.track.artists : "", sourceName(st.source, tr)].filter(function(p) { return p })
   return parts.join(" · ")
 }

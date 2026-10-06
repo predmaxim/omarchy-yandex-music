@@ -236,3 +236,46 @@ async def test_pos_event_during_start_wave_no_spurious_feedback():
     await asyncio.sleep(0)
     skips = [f for f in api.feedback if f[1] == "skip"]
     assert skips == [(WAVE, "skip", "100:100")]
+
+
+async def test_wave_language_any():
+    p, api, mpv, _ = make()
+    await p.start_wave("calm")
+    assert api.languages == ["any"]
+
+
+async def test_play_unpauses():
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    assert ("set_property", "pause", False) in mpv.calls
+
+
+async def test_play_out_of_range_is_error():
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    for i in (-1, 5):
+        mpv.calls.clear()
+        await p.play(i)
+        assert p.index == 0 and p.error == "nothing to play" and not mpv.calls
+
+
+async def test_empty_likes_and_rotor():
+    p, api, mpv, _ = make(likes=0)
+    await p.start_likes()
+    assert p.error == "nothing to play" and not mpv.calls
+    p, api, mpv, _ = make(wave_batches=[[]])
+    await p.start_wave(None)
+    assert p.error == "nothing to play"
+    p, api, mpv, _ = make()
+    async def none(*a, **k): return None
+    api.rotor_station_tracks = none
+    await p.start_wave(None)
+    assert p.error == "nothing to play"
+
+
+async def test_reload_sends_no_skip():
+    p, api, mpv, _ = make()
+    await p.start_wave(None)
+    api.feedback.clear()
+    await p.reload()
+    assert [f[1] for f in api.feedback] == ["trackStarted"]

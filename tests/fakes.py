@@ -71,8 +71,8 @@ class FakeApi:
         batch = self.wave_batches[min(len(self.rotor_calls) - 1, len(self.wave_batches) - 1)]
         return NS(batch_id=f"b{len(self.rotor_calls)}", sequence=[NS(track=t) for t in batch])
 
-    async def rotor_station_settings2(self, station, mood, diversity):
-        self.settings.append((station, mood, diversity)); return True
+    async def rotor_station_settings2(self, station, mood, diversity, language=None):
+        self.settings.append((station, mood, diversity)); self.languages = getattr(self, "languages", []) + [language]; return True
 
     async def rotor_station_feedback(self, station, type_, **kw):
         self.feedback.append((station, type_, kw.get("track_id"))); return True

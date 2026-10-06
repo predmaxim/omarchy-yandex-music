@@ -129,3 +129,28 @@ async def test_invalid_utf8_line_survives(tmp_path):
     w.write(b'{"cmd":"playlist"}\n'); await w.drain()
     assert json.loads(await asyncio.wait_for(r.readline(), 2))["source"]["type"] == "likes"
     w.close(); server.close()
+
+
+async def test_relogin_stops_old_player(tmp_path):
+    d, api = daemon(tmp_path)
+    await d.boot()
+    old = d.player
+    async def fake_login(client, shown): return "new"
+    orig, auth.login = auth.login, fake_login
+    try:
+        await d._login()
+    finally:
+        auth.login = orig
+    assert ("stop",) in old.mpv.calls and d.player is not old and d.state()["auth"] == "ok"
+
+
+async def test_login_expired_code_message(tmp_path):
+    from yandex_music.exceptions import DeviceAuthError
+    d, api = daemon(tmp_path, token=None)
+    async def bad(client, shown): raise DeviceAuthError("invalid_grant")
+    orig, auth.login = auth.login, bad
+    try:
+        await d._login()
+    finally:
+        auth.login = orig
+    assert d.state()["error"] == "login code expired, try again"

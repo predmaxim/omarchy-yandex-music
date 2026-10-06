@@ -113,3 +113,12 @@ async def test_on_event_awaits_command_completes(tmp_path):
         await asyncio.wait_for(command_completed.wait(), timeout=3.0)
     finally:
         await mpv.stop()
+
+
+async def test_start_failure_kills_proc(tmp_path, monkeypatch):
+    mpv = Mpv(str(tmp_path / "mpv.sock"), lambda e: None)
+    async def boom(*a, **k): raise OSError("nope")
+    monkeypatch.setattr(asyncio, "open_unix_connection", boom)
+    with pytest.raises(OSError):
+        await mpv.start()
+    assert mpv.proc.returncode is not None
