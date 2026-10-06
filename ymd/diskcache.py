@@ -8,7 +8,6 @@ from pathlib import Path
 
 DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "predmaxim.yandex-music" / "tracks"
 LIMIT = 2 << 30
-COVERS = DIR.parent / "covers"
 COVER_LIMIT = 200 << 20
 
 
