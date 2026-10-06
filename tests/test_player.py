@@ -29,6 +29,11 @@ async def wave(p, mood):
     await p.start_wave(mood); await p.play(0); await p.settle()
 
 
+def ended(mpv, reason="eof", k=None):
+    """mpv's end-file for playlist entry k (the current one by default)."""
+    return {"event": "end-file", "reason": reason, "playlist_entry_id": mpv.ids[mpv.pos if k is None else k]}
+
+
 async def pos(p, i):
     """Simulate mpv reporting position change."""
     p.mpv.pos = i
@@ -472,14 +477,14 @@ async def test_eof_with_single_entry_advances():
     async def boom(*a, **k): raise OSError("x")
     p._append_next = boom
     await p.play(0); await p.settle()
-    await p.on_event({"event": "end-file", "reason": "eof"})
+    await p.on_event(ended(mpv))
     assert p.index == 1 and mpv.playlist == ["url1"]
 
 
 async def test_eof_with_neighbour_loaded_leaves_it_to_mpv():
     p, api, mpv, _ = make()
     await likes(p)
-    await p.on_event({"event": "end-file", "reason": "eof"})
+    await p.on_event(ended(mpv))
     assert p.index == 0
 
 
@@ -624,8 +629,8 @@ async def test_stop_then_toggle_resumes_audible_track():
 async def test_eof_when_neighbour_arrived_after_idle():
     p, api, mpv, _ = make()
     await likes(p)                            # loaded [0, 1]
-    mpv.playlist = []                         # mpv hit EOF and went idle before the neighbour was appended
-    await p.on_event({"event": "end-file", "reason": "eof"})
+    mpv.idle = True                           # mpv hit EOF and went idle before the neighbour was appended
+    await p.on_event(ended(mpv))
     assert p.index == 1 and mpv.playlist[0] == "url1"
 
 
@@ -668,7 +673,7 @@ async def test_eof_at_window_edge_while_browsing_plays_from_play_queue():
     p._append_next = boom
     await p.play(3); await p.settle()
     await p.start_wave(None)
-    await p.on_event({"event": "end-file", "reason": "eof"})
+    await p.on_event(ended(mpv))
     assert p.now["id"] == "4" and mpv.playlist == ["url4"] and p.state()["index"] == -1
 
 
@@ -761,9 +766,10 @@ async def test_eof_of_old_track_during_play_does_not_skip_new_one():
             await gate.wait()
         return await orig(tid, **k)
     api.tracks_download_info = slow
+    end0 = ended(mpv)
     play = asyncio.create_task(p.play(3))
     await asyncio.sleep(0)
-    eof = asyncio.create_task(p.on_event({"event": "end-file", "reason": "eof"}))   # track 0 ended meanwhile
+    eof = asyncio.create_task(p.on_event(end0))           # track 0 ended meanwhile
     await asyncio.sleep(0)
     gate.set()
     await play; await eof; await p.settle()
@@ -839,3 +845,19 @@ def test_trim_covers_by_pattern(tmp_path):
     diskcache.trim(tmp_path, 20, "*.jpg")
     assert sorted(f.name for f in tmp_path.glob("*.jpg")) == ["1.jpg", "2.jpg"]
     assert diskcache.COVERS.name == "covers" and diskcache.COVER_LIMIT == 200 << 20
+
+
+# --- v5 ---
+
+
+async def test_eof_of_an_entry_the_window_slid_past_does_not_skip():
+    p, api, mpv, _ = make()
+    await likes(p)                                        # entries [0, 1], track 0 audible
+    end0 = ended(mpv)
+    async def nothing(): pass
+    p._append_next = nothing                              # the next neighbour never arrives
+    await pos(p, 1)                                       # mpv moved on and the slide ran before the end-file
+    await p.on_event(end0)                                # track 0's EOF: not the audible entry any more
+    assert p.index == 1 and mpv.playlist == ["url0", "url1"]
+    await p.on_event(ended(mpv))                          # track 1's own EOF at the window edge: advance
+    assert p.index == 2 and mpv.playlist[0] == "url2"

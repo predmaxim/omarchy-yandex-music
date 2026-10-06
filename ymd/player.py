@@ -443,10 +443,10 @@ class Player:
                 if f := self._local(tid):
                     f.unlink(missing_ok=True)  # maybe a bad copy
             if self.last_end == "eof" and self.index >= 0:
-                ended = self.loaded  # _play always makes a new list
                 async with self.lock:  # mpv has nothing after this track (or went idle): advance ourselves
-                    if self.loaded is not ended:
-                        return  # a play while this waited for the lock: the track that ended is gone
+                    eid = msg.get("playlist_entry_id")
+                    if eid is None or eid != await self._audible_entry():
+                        return  # a play or a slide meanwhile: the entry that ended is not the audible track
                     n = self.index + 1
                     edge = self.loaded[-1:] == [self.index]
                     if edge and n >= len(self.play_queue):
@@ -479,6 +479,15 @@ class Player:
         elif name == "duration":
             self.duration = data or 0.0
         self.notify()
+
+    async def _audible_entry(self):
+        """Lock held. mpv's playlist entry id of the audible track, None when it is not loaded."""
+        if self.index not in self.loaded:
+            return None
+        try:
+            return await self.mpv.command("get_property", f"playlist/{self.loaded.index(self.index)}/id")
+        except Exception:
+            return None
 
     async def _idle(self):
         try:
