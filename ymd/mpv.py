@@ -7,7 +7,10 @@ mpv events (end-file, …) go to on_event. mpv-mpris is loaded explicitly
 """
 import asyncio
 import json
+import logging
 import os
+
+logger = logging.getLogger("ymd")
 
 MPRIS = "/usr/lib/mpv-mpris/mpris.so"
 OBSERVED = ["playlist-pos", "pause", "time-pos", "idle-active"]
@@ -24,6 +27,15 @@ class Mpv:
         self.pending, self.next_id = {}, 0
 
     async def start(self):
+        if self.writer:
+            self.writer.close()
+        if self.task and not self.task.done():
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+        self.task = None  # Reset task before starting new mpv
         if os.path.exists(self.sock_path):
             os.unlink(self.sock_path)
         args = ["mpv", "--idle=yes", "--no-video", "--no-config", "--no-terminal",
@@ -41,35 +53,67 @@ class Mpv:
             await self.command("observe_property", n, name)
 
     async def command(self, *args):
+        if not self.task or self.task.done():
+            raise MpvError("mpv not running")
         self.next_id += 1
         rid = self.next_id
         fut = asyncio.get_running_loop().create_future()
         self.pending[rid] = fut
-        self.writer.write((json.dumps({"command": list(args), "request_id": rid}) + "\n").encode())
-        await self.writer.drain()
+        try:
+            self.writer.write((json.dumps({"command": list(args), "request_id": rid}) + "\n").encode())
+            await self.writer.drain()
+        except Exception as e:
+            self.pending.pop(rid, None)
+            raise MpvError(f"mpv not running: {e}")
         return await fut
 
     async def _read(self):
-        while line := await self.reader.readline():
-            msg = json.loads(line)
-            if "event" in msg:
-                await self.on_event(msg)
-            elif (fut := self.pending.pop(msg.get("request_id"), None)) and not fut.done():
-                if msg.get("error") == "success":
-                    fut.set_result(msg.get("data"))
-                else:
-                    fut.set_exception(MpvError(f"{msg.get('error')}"))
-        for fut in self.pending.values():
-            if not fut.done():
-                fut.set_exception(MpvError("mpv exited"))
-        self.pending.clear()
+        try:
+            while line := await self.reader.readline():
+                try:
+                    msg = json.loads(line)
+                    if "event" in msg:
+                        await self.on_event(msg)
+                    elif (fut := self.pending.pop(msg.get("request_id"), None)) and not fut.done():
+                        if msg.get("error") == "success":
+                            fut.set_result(msg.get("data"))
+                        else:
+                            fut.set_exception(MpvError(f"{msg.get('error')}"))
+                except (json.JSONDecodeError, Exception) as e:
+                    logger.warning(f"Error processing mpv response: {e}")
+        finally:
+            for fut in self.pending.values():
+                if not fut.done():
+                    fut.set_exception(MpvError("mpv exited"))
+            self.pending.clear()
 
     async def run_forever(self, on_restart):
-        """Restart mpv whenever it dies; on_restart re-loads the current track."""
+        """Restart mpv whenever it dies; on_restart re-loads the current track.
+
+        Note: cancel run_forever before calling stop() to avoid orphaned mpv processes.
+        """
         while True:
+            # Ensure mpv is started initially
+            if not self.proc:
+                while True:
+                    try:
+                        await self.start()
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to start mpv: {e}, retrying in 1s")
+                        await asyncio.sleep(1)
+
             await self.proc.wait()
             await asyncio.sleep(1)
-            await self.start()
+
+            # Restart after crash
+            while True:
+                try:
+                    await self.start()
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed to start mpv: {e}, retrying in 1s")
+                    await asyncio.sleep(1)
             await on_restart()
 
     async def stop(self):
