@@ -122,3 +122,28 @@ async def test_start_failure_kills_proc(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         await mpv.start()
     assert mpv.proc.returncode is not None
+
+
+async def test_loadfile_per_file_af_and_fade_out_on_real_mpv(tmp_path):
+    """Exact syntax the player uses: loadfile <url> <mode> <index> <options>, af add @fo, reset by next file."""
+    import shutil, subprocess
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg missing")
+    f = tmp_path / "s.mp3"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=3", str(f)], check=True)
+    from ymd.player import FADE_IN
+    mpv = Mpv(str(tmp_path / "mpv.sock"), lambda e: asyncio.sleep(0))
+    await mpv.start()
+    try:
+        await mpv.command("loadfile", str(f), "replace", -1, FADE_IN)
+        await mpv.command("loadfile", str(f), "append", -1, FADE_IN)
+        await asyncio.sleep(0.3)
+        assert (await mpv.command("get_property", "af"))[0]["params"]["graph"] == "afade=t=in:d=3"
+        await mpv.command("af", "add", "@fo:lavfi=[afade=t=out:st=1.0:d=2.0]")
+        assert [x.get("label") for x in await mpv.command("get_property", "af")] == [None, "fo"]
+        await mpv.command("playlist-next")
+        await asyncio.sleep(0.3)
+        assert [x.get("label") for x in await mpv.command("get_property", "af")] == [None]  # fo gone
+        assert await mpv.command("af", "remove", "@fo") is None                              # absent label is fine
+    finally:
+        await mpv.stop()

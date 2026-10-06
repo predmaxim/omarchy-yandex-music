@@ -10,7 +10,7 @@ def daemon(tmp_path, token="tok"):
     if token: auth.save_token(token, tmp_path / "token")
     api = FakeApi()
     async def make_client(tok): return api
-    d = Daemon(make_client, lambda c: Player(c, FakeMpv(), lambda: None), tmp_path / "token", str(tmp_path / "qr.png"))
+    d = Daemon(make_client, lambda c: Player(c, FakeMpv(), lambda: None, cache_dir=tmp_path / "tracks", download=lambda u, p: 1 / 0), tmp_path / "token", str(tmp_path / "qr.png"))
     return d, api
 
 
@@ -154,3 +154,12 @@ async def test_login_expired_code_message(tmp_path):
     finally:
         auth.login = orig
     assert d.state()["error"] == "login code expired, try again"
+
+
+async def test_seek_command_and_state_fields(tmp_path):
+    d, _ = daemon(tmp_path)
+    await d.boot()
+    await d.handle('{"cmd":"playlist"}'); await d.handle('{"cmd":"play","index":0}')
+    await d.handle('{"cmd":"seek","seconds":42.5}')
+    assert ("seek", 42.5, "absolute") in d.player.mpv.calls
+    assert d.state()["position"] == 42.5 and "duration" in d.state() and d.state()["error"] is None

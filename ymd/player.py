@@ -7,15 +7,26 @@ the window and sends wave feedback. A stream link is fetched right before it
 is loaded: links expire.
 """
 import asyncio
-from . import tracks
+import logging
+import os
+import time
+from . import diskcache, tracks
+
+log = logging.getLogger("ymd")
 
 WAVE = "user:onyourwave"
 MOODS = ["all", "fun", "active", "calm", "sad"]
+FADE_S = 3
+FADE_IN = f"af=lavfi=[afade=t=in:d={FADE_S}]"  # per-file: mpv resets it with the next file
+URL_TTL = 600
 
 
 class Player:
-    def __init__(self, api, mpv, notify):
+    def __init__(self, api, mpv, notify, cache_dir=None, download=None):
         self.api, self.mpv, self.notify = api, mpv, notify
+        self.cache_dir, self.download = cache_dir or diskcache.DIR, download or diskcache.fetch
+        self.urls, self.tasks, self.downloading = {}, set(), set()
+        self.gen, self.duration, self.faded, self.radio_pending = 0, 0.0, False, False
         self.queue, self.index, self.loaded = [], -1, []
         self.source = {"type": "none", "title": "", "mood": ""}
         self.station, self.liked = None, set()
@@ -36,7 +47,8 @@ class Player:
                 self.error = "nothing to play"; self.notify(); return
             self.station, self.queue = None, queue
             self.source = {"type": "likes", "title": "", "mood": ""}
-            await self._play(0)
+            await self._detach()
+            self.notify()
 
     async def start_wave(self, mood):
         if mood:
@@ -46,16 +58,28 @@ class Player:
     async def start_track_wave(self, track_id):
         known = {t["id"]: t for t in self.queue + self.results}
         title = known.get(track_id, {}).get("title", "")
-        await self._start_station(f"track:{track_id}", {"type": "track-wave", "title": title, "mood": ""})
+        await self._start_station(f"track:{track_id}", {"type": "track-wave", "title": title, "mood": ""}, play=True)
 
-    async def _start_station(self, station, source):
+    async def _start_station(self, station, source, play=False):
         async with self.lock:
-            self.station, self.queue, self.source, self.loaded = station, [], source, []
+            self.station, self.queue, self.source = station, [], source
+            await self._detach()
             await self._fetch_station()
             if not self.queue:
                 self.error = "nothing to play"; self.notify(); return
-            await self.api.rotor_station_feedback(station, "radioStarted")
-            await self._play(0)
+            self.radio_pending = True  # radioStarted goes out with the first play
+            if play:
+                await self._play(0)
+            else:
+                self.notify()
+
+    async def _detach(self):
+        """New source: forget the old window; a track that is playing keeps playing alone."""
+        self.gen += 1
+        self.index, self.radio_pending = -1, False
+        if self.loaded:
+            await self.mpv.command("playlist-clear")  # keeps only the current entry
+        self.loaded = []
 
     async def _fetch_station(self):
         last = self.queue[-1]["id"] if self.queue else None
@@ -80,49 +104,135 @@ class Player:
             await self._play(i)
 
     # --- playback ------------------------------------------------------------
+    def _spawn(self, coro):
+        t = asyncio.create_task(coro)
+        self.tasks.add(t)
+        t.add_done_callback(self.tasks.discard)
+
+    async def settle(self):
+        """Await pending background work (neighbours, feedback, prefetch, downloads)."""
+        while self.tasks:
+            await asyncio.gather(*list(self.tasks), return_exceptions=True)
+            await asyncio.sleep(0)
+
+    def _local(self, tid):
+        f = self.cache_dir / f"{tid}.mp3"
+        return f if f.exists() else None
+
     async def _url(self, i):
-        return tracks.best_link(await self.api.tracks_download_info(self.queue[i]["id"], get_direct_links=True))
+        tid = self.queue[i]["id"]
+        if f := self._local(tid):
+            os.utime(f)  # LRU: touch on play
+            return str(f)
+        hit = self.urls.get(tid)
+        if hit and time.monotonic() - hit[1] < URL_TTL:
+            return hit[0]
+        url = tracks.best_link(await self.api.tracks_download_info(tid, get_direct_links=True))
+        if url is not None:
+            self.urls[tid] = (url, time.monotonic())
+        return url
+
+    async def _load(self, url, mode, index=-1):
+        await self.mpv.command("loadfile", url, mode, index, FADE_IN)
 
     async def play(self, i):
         async with self.lock:
             await self._play(i)
 
     async def _play(self, i):
-        """Internal play without lock; must be called while holding self.lock."""
+        """Internal play without lock; must be called while holding self.lock.
+
+        Only the current track's link is fetched before it starts; neighbours,
+        feedback, prefetch and the disk copy follow in _after_play.
+        """
         if not 0 <= i < len(self.queue):
             self.error = "nothing to play"; self.notify(); return
+        prev = (self.index, self.time_pos, self.duration)
+        skip = None
         if self.station and 0 <= self.index < len(self.queue) and self.loaded:
-            await self._feedback("skip", self.index)
-        self.index, self.error, self.time_pos, self.last_end = i, None, 0.0, None
+            skip = (self.station, "skip", self.queue[self.index]["fid"], self.time_pos)
+        self.gen += 1
+        gen = self.gen
+        self.index, self.error, self.time_pos, self.duration, self.last_end = i, None, 0.0, 0.0, None
+        self.faded = False
+        self.notify()  # the marker moves before any network call
 
-        # Find a playable track, skipping unavailable ones
-        playable_i = i
-        while True:
-            url = await self._url(playable_i)
-            if url is not None:
-                break
-            playable_i += 1
-            # Fetch more tracks for stations if needed
-            if self.station and playable_i >= len(self.queue):
-                await self._fetch_station()
-            if playable_i >= len(self.queue):
-                # No playable tracks found
-                self.index, self.error = i, "track unavailable"
-                self.notify()
-                return
-
-        self.index = playable_i
-        await self.mpv.command("loadfile", url, "replace")
+        try:
+            # Find a playable track, skipping unavailable ones
+            playable_i = i
+            while True:
+                url = await self._url(playable_i)
+                if url is not None:
+                    break
+                playable_i += 1
+                # Fetch more tracks for stations if needed
+                if self.station and playable_i >= len(self.queue):
+                    await self._fetch_station()
+                if playable_i >= len(self.queue):
+                    # No playable tracks found: mpv keeps what it had
+                    self.index, self.time_pos, self.duration = prev
+                    self.error = "track unavailable"
+                    self.notify()
+                    return
+            self.index = playable_i
+            await self._load(url, "replace")
+        except BaseException:
+            self.index, self.time_pos, self.duration = prev  # the marker follows what mpv plays
+            self.notify()
+            raise
         await self.mpv.command("set_property", "pause", False)  # pause is global in mpv
+        self.playing = True
         self.loaded = [playable_i]
-        await self._append_next()
-        if playable_i > 0:
-            prev_url = await self._url(playable_i - 1)
-            if prev_url is not None:
-                await self.mpv.command("loadfile", prev_url, "insert-at", 0)
-                self.loaded.insert(0, playable_i - 1)
-        await self._feedback("trackStarted", playable_i)
         self.notify()
+        self._spawn(self._after_play(gen, playable_i, skip))
+
+    async def _after_play(self, gen, i, skip):
+        try:
+            if skip:
+                await self._send(*skip)
+            async with self.lock:
+                if gen != self.gen:
+                    return  # superseded by another play / source
+                await self._append_next()
+                if i > 0:
+                    prev_url = await self._url(i - 1)
+                    if prev_url is not None:
+                        await self._load(prev_url, "insert-at", 0)
+                        self.loaded.insert(0, i - 1)
+                if self.radio_pending:
+                    self.radio_pending = False
+                    await self._send(self.station, "radioStarted")
+                await self._feedback("trackStarted", i)
+            await self._cache_liked(i)
+        except Exception as e:
+            log.warning("after play: %s", e)
+
+    async def _prefetch(self, n):
+        try:
+            if n < len(self.queue):
+                await self._url(n)
+        except Exception as e:
+            log.warning("prefetch: %s", e)
+
+    async def _cache_liked(self, i):
+        """Keep a disk copy of a liked track that is playing from a stream link."""
+        t = self.queue[i]["id"] if 0 <= i < len(self.queue) else None
+        hit = self.urls.get(t)
+        if t not in self.liked or t in self.downloading or self._local(t) or not hit:
+            return
+        self.downloading.add(t)
+        f = self.cache_dir / f"{t}.mp3"
+        part = f.with_suffix(".part")
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(self.download, hit[0], str(part))
+            part.rename(f)
+            await asyncio.to_thread(diskcache.trim, self.cache_dir)
+        except Exception as e:
+            log.warning("cache %s: %s", t, e)
+            part.unlink(missing_ok=True)
+        finally:
+            self.downloading.discard(t)
 
     async def reload(self):
         """mpv restarted: load the current track again."""
@@ -137,8 +247,9 @@ class Player:
         if n < len(self.queue):
             url = await self._url(n)
             if url is not None:
-                await self.mpv.command("loadfile", url, "append")
+                await self._load(url, "append")
                 self.loaded.append(n)
+        self._spawn(self._prefetch(n + 1))
 
     async def _on_pos(self, p):
         """Internal; called with lock held from on_event."""
@@ -147,7 +258,7 @@ class Player:
         old, self.index = self.index, self.loaded[p]
         if self.station and self.last_end != "error":
             await self._feedback("trackFinished" if self.last_end == "eof" else "skip", old)
-        self.time_pos = 0.0
+        self.time_pos, self.duration, self.faded = 0.0, 0.0, False
         self.last_end = None
         if self.index > old:
             while p > 1:
@@ -163,22 +274,37 @@ class Player:
             if p == 0 and self.index > 0:
                 prev_url = await self._url(self.index - 1)
                 if prev_url is not None:
-                    await self.mpv.command("loadfile", prev_url, "insert-at", 0)
+                    await self._load(prev_url, "insert-at", 0)
                     self.loaded.insert(0, self.index - 1)
         await self._feedback("trackStarted", self.index)
         self.notify()
+        self._spawn(self._cache_liked(self.index))
 
     async def _feedback(self, kind, i):
         if self.station:
-            kw = {"track_id": self.queue[i]["fid"]}
-            if kind in ("skip", "trackFinished"):
-                kw["total_played_seconds"] = self.time_pos
-            await self.api.rotor_station_feedback(self.station, kind, **kw)
+            await self._send(self.station, kind, self.queue[i]["fid"], self.time_pos)
+
+    async def _send(self, station, kind, fid=None, secs=None):
+        """Wave feedback must never break playback: log and carry on."""
+        kw = {}
+        if fid:
+            kw["track_id"] = fid
+        if kind in ("skip", "trackFinished"):
+            kw["total_played_seconds"] = max(secs or 0, 0.1)  # the library drops a falsy 0
+        try:
+            await self.api.rotor_station_feedback(station, kind, **kw)
+        except Exception as e:
+            log.warning("feedback %s: %s", kind, e)
 
     async def on_event(self, msg):
         name, data = msg.get("name"), msg.get("data")
         if msg.get("event") == "end-file":
             self.last_end = msg.get("reason")
+            if self.last_end == "error" and 0 <= self.index < len(self.queue):
+                tid = self.queue[self.index]["id"]
+                self.urls.pop(tid, None)  # stale link: refetch next time
+                if f := self._local(tid):
+                    f.unlink(missing_ok=True)  # maybe a bad copy
             return
         if msg.get("event") != "property-change":
             return
@@ -197,21 +323,39 @@ class Player:
             self.playing = False
         elif name == "time-pos":
             self.time_pos = data or 0.0
+            if (not self.faded and self.loaded and self.duration > 2 * FADE_S
+                    and self.time_pos >= self.duration - FADE_S):
+                self.faded = True  # once per track; a skip loads a file that resets af
+                await self.mpv.command("af", "add", f"@fo:lavfi=[afade=t=out:st={self.time_pos}:d={self.duration - self.time_pos}]")
             return                                   # no state line per tick
+        elif name == "duration":
+            self.duration = data or 0.0
         self.notify()
 
     async def toggle(self):
         async with self.lock:
-            if not self.loaded and 0 <= self.index < len(self.queue):
-                await self._play(self.index)
+            if not self.loaded and not self.playing and self.queue:
+                await self._play(max(self.index, 0))
             else:
                 await self.mpv.command("cycle", "pause")
 
     async def stop(self):
         async with self.lock:
             await self.mpv.command("stop")
+            self.gen += 1
             self.loaded, self.playing = [], False
             self.notify()
+
+    async def seek(self, seconds):
+        if not self.loaded:
+            return
+        s = min(max(seconds, 0.0), self.duration or seconds)
+        await self.mpv.command("seek", s, "absolute")
+        if self.faded and s < self.duration - FADE_S:
+            self.faded = False
+            await self.mpv.command("af", "remove", "@fo")
+        self.time_pos = s
+        self.notify()
 
     async def next(self):
         await self.mpv.command("playlist-next")
@@ -244,6 +388,7 @@ class Player:
         row = lambda t: {"id": t["id"], "title": t["title"], "artists": t["artists"]}
         return {"source": self.source, "moods": MOODS, "playing": self.playing, "track": track,
                 "queue": [row(t) for t in self.queue], "index": self.index,
+                "position": self.time_pos, "duration": self.duration,
                 "search": {"text": self.search_text,
                            "results": [dict(row(t), album=t["album"]) for t in self.results]},
                 "error": self.error}

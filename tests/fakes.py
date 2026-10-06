@@ -33,6 +33,9 @@ class FakeMpv:
                 import asyncio
                 if asyncio.iscoroutine(result):
                     await result
+        elif args[0] == "playlist-clear":
+            self.playlist = self.playlist[self.pos:self.pos + 1]
+            self.pos = 0
         elif args[0] == "playlist-remove":
             k = args[1]
             self.playlist.pop(k)
@@ -58,7 +61,7 @@ class FakeApi:
         self.likes = [track(i) for i in range(likes)]
         self.wave_batches = wave_batches or [[track(100 + i) for i in range(5)], [track(200 + i) for i in range(5)]]
         self.feedback, self.settings, self.liked_add, self.disliked, self.searched = [], [], [], [], []
-        self.rotor_calls = []
+        self.rotor_calls, self.feedback_kw, self.feedback_error = [], [], None
         self.search_tracks = search_tracks or NS(results=[track(900), track(901)])
         self.unavailable_ids = unavailable_ids or set()
 
@@ -75,7 +78,9 @@ class FakeApi:
         self.settings.append((station, mood, diversity)); self.languages = getattr(self, "languages", []) + [language]; return True
 
     async def rotor_station_feedback(self, station, type_, **kw):
-        self.feedback.append((station, type_, kw.get("track_id"))); return True
+        if self.feedback_error:
+            raise self.feedback_error
+        self.feedback.append((station, type_, kw.get("track_id"))); self.feedback_kw.append(kw); return True
 
     async def tracks_download_info(self, track_id, get_direct_links=False):
         if track_id in self.unavailable_ids:
