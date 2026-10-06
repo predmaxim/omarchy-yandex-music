@@ -3,12 +3,11 @@
 // ymd's state line -> what the bar icon and the window show, and the command
 // lines the plugin writes to ymd's socket.
 
-// Nerd Font glyphs: music, pause, music-off, account-key.
+// Nerd Font glyphs: play, pause, a plain note when nothing plays; prev, next…
 var ICONS = {
-  playing: String.fromCodePoint(0xF075A),
+  playing: String.fromCodePoint(0xF040A),
   paused: String.fromCodePoint(0xF03E4),
-  off: String.fromCodePoint(0xF075B),
-  login: String.fromCodePoint(0xF0306),
+  empty: String.fromCodePoint(0xF075A),
   prev: String.fromCodePoint(0xF04AE),
   next: String.fromCodePoint(0xF04AD),
   play: String.fromCodePoint(0xF040A)
@@ -39,9 +38,9 @@ function cmd(name, args) {
 }
 
 function view(st) {
-  if (!st || !st.running) return { lit: false, icon: ICONS.off, tip: "Music service is not running", arg: "" }
-  if (st.auth !== "ok") return { lit: false, icon: ICONS.login, tip: "Yandex Music: log in needed", arg: "" }
-  if (!st.track) return { lit: false, icon: ICONS.off, tip: "Nothing is playing", arg: "" }
+  if (!st || !st.running) return { lit: false, icon: ICONS.empty, tip: "Music service is not running", arg: "" }
+  if (st.auth !== "ok") return { lit: false, icon: ICONS.empty, tip: "Yandex Music: log in needed", arg: "" }
+  if (!st.track) return { lit: false, icon: ICONS.empty, tip: "Nothing is playing", arg: "" }
   return { lit: true, icon: st.playing ? ICONS.playing : ICONS.paused, tip: "%1 — %2", arg: st.track.artists, arg2: st.track.title }
 }
 
