@@ -47,10 +47,11 @@ CursorSurface {
           font.bold: word.chosen
         }
         MouseArea {
+          id: area
           anchors.fill: parent
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
-          onEntered: words.panel.setCursor(words.rowName, word.index)
+          onPositionChanged: function(mouse) { words.panel.hoverCursor(area, mouse, words.rowName, word.index) }
           onClicked: words.picked(word.modelData.value)
         }
       }

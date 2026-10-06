@@ -51,6 +51,9 @@ Panel {
   function cursor() { return { row: root.row, col: root.col, cur: root.cur } }
   function setCursor(row, col, cur) { root.row = row; root.col = col || 0; root.cur = cur === undefined ? -1 : cur }
   function placeCursor(c) { root.setCursor(c.row, c.col, c.cur) }
+  // The mouse joins the cursor only when it really moves (rules.md §9): items swapped or moved under
+  // a resting pointer (another tab, the wave starting) do not steal the keyboard's row.
+  function hoverCursor(item, p, row, col, cur) { if (moveGate.moved(item, p)) root.setCursor(row, col, cur) }
 
   function refreshRows() {
     var r = Model.rows(root.music, root.pendingIndex)
@@ -98,9 +101,9 @@ Panel {
   function moveRow(step) {
     root.cursorPending = false
     root.placeCursor(Model.moveCursor(root.music, root.cursor(), step, root.pendingMood))
+    moveGate.reset()
     if (root.row !== "list") return
     if (root.cur >= root.shown.length - 1) root.requestMore()
-    moveGate.reset()
     list.positionViewAtIndex(root.cur, ListView.Contain)
   }
 
@@ -163,7 +166,7 @@ Panel {
   }
 
   // The rows changed under the cursor (another tab, the wave started or stopped, the track went away).
-  function fixCursor() { root.placeCursor(Model.screenCursor(root.music, root.cursor())) }
+  function fixCursor() { root.placeCursor(Model.screenCursor(root.music, root.cursor())); moveGate.reset() }
 
   onShownChanged: {
     if (root.row !== "list") return
@@ -608,7 +611,10 @@ Panel {
               foreground: root.row === "list" && root.cur === entry.index ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.4)
               fontFamily: root.bar.fontFamily
               onClicked: root.waveFrom(entry.index)
-              onHovered: function(h) { if (h) root.setCursor("list", 1, entry.index) }
+              HoverHandler {
+                id: waveHover
+                onPointChanged: if (hovered) root.hoverCursor(waveButton, waveHover.point.position, "list", 1, entry.index)
+              }
             }
           }
         }

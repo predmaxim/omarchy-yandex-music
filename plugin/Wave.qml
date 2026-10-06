@@ -85,6 +85,7 @@ Column {
 
   // Seek: the slider, elapsed and total under it; disabled before the wave starts.
   CursorSurface {
+    id: seekRow
     width: parent.width
     implicitHeight: seek.implicitHeight + times.implicitHeight + Style.space(4) * 2
     hasCursor: wave.panel.row === "seek"
@@ -126,7 +127,10 @@ Column {
         font.pixelSize: Style.font.caption
       }
     }
-    HoverHandler { onHoveredChanged: if (hovered && wave.audible) wave.panel.setCursor("seek", 0) }
+    HoverHandler {
+      id: seekHover
+      onPointChanged: if (seekHover.hovered && wave.audible) wave.panel.hoverCursor(seekRow, seekHover.point.position, "seek", 0)
+    }
   }
 
   // Dislike at the left edge, like at the right, prev · play/pause · next centered; before the wave starts only ▶.
@@ -140,10 +144,11 @@ Column {
       panel: wave.panel
       name: "dislike"
       visible: wave.playing
+      foreground: wave.dim   // the edges stay quiet next to the transport
       anchors.left: parent.left
       anchors.leftMargin: Style.space(4)
       anchors.verticalCenter: parent.verticalCenter
-      iconSize: Style.font.iconLarge
+      iconSize: Style.font.heading
     }
     Row {
       anchors.centerIn: parent
@@ -156,10 +161,11 @@ Column {
       panel: wave.panel
       name: "like"
       visible: wave.playing
+      foreground: wave.dim   // the edges stay quiet next to the transport
       anchors.right: parent.right
       anchors.rightMargin: Style.space(4)
       anchors.verticalCenter: parent.verticalCenter
-      iconSize: Style.font.iconLarge
+      iconSize: Style.font.heading
     }
   }
 }
