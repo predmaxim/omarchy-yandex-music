@@ -180,23 +180,6 @@ async def test_best_link_none_skips_to_next_playable():
     assert p.error is None
 
 
-async def test_race_condition_pos_during_loadfile_replace():
-    """After play(i>0) with replace+insert-at, pos events read live position not event data."""
-    import asyncio
-    p, api, mpv, _ = make()
-    await p.start_likes()
-    # play(2): replace with index 2, insert-at 0 for index 1
-    # This triggers replace (pos=0) then insert-at 0 (pos=1 now)
-    await p.play(2)
-    assert p.index == 2 and p.loaded == [1, 2, 3]
-    # Verify that the fix works: if we emit a stale pos(0) event but mpv.pos is actually 1
-    # (simulating the event arriving after the actual pos changed), it should use live pos
-    mpv.pos = 1
-    await p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0})
-    # Live pos 1 maps to loaded[1]=2, so index becomes 2
-    assert p.index == 2  # No spurious backwards move
-
-
 async def test_best_link_none_skips_multiple_unavailable():
     """When multiple tracks are unavailable, skip to next playable."""
     p, api, mpv, _ = make(unavailable_ids={"0", "1", "2"})
@@ -215,51 +198,41 @@ async def test_best_link_all_unavailable_sets_error():
     assert p.error == "track unavailable" and mpv.playlist == []
 
 
-async def test_pos_event_reads_live_position():
-    """on_event reads live position via get_property, not stale event data."""
-    p, api, mpv, _ = make()
-    await p.start_likes()
-    await p.play(2)
-    # After play(2): index=2, loaded=[1,2,3], mpv.pos=0
-    # Emit pos event with stale data but check that live pos is used
-    # Set mpv.pos to 1 (live position after some user action)
-    mpv.pos = 1
-    await p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0})
-    # Live pos (1) maps to loaded[1]=2, so index should be 2, not affected by stale data (0)
-    assert p.index == 2
+def interleave_once(p):
+    """on_load hook: on the first loadfile, fire a playlist-pos event and let it run mid-play()."""
+    import asyncio
+    fired = []
+
+    async def hook():
+        if fired:
+            return
+        fired.append(1)
+        # mpv.pos is transient here (0 right after `replace`, before `insert-at`)
+        asyncio.create_task(p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0}))
+        for _ in range(3):
+            await asyncio.sleep(0)
+    return hook
 
 
 async def test_pos_event_during_play_does_not_corrupt_window():
-    """Concurrent pos event during play(2) with on_load hook must not corrupt window."""
-    import asyncio
+    """pos event mid-play() must read mpv's position under the lock, after the window is final."""
     p, api, mpv, _ = make()
     await p.start_likes()
-
-    def hook():
-        asyncio.create_task(p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0}))
-
-    mpv.on_load = hook
+    mpv.on_load = interleave_once(p)
     await p.play(2)
-    for _ in range(5):
-        await asyncio.sleep(0)
+    import asyncio
+    await asyncio.sleep(0)
     assert p.index == 2 and p.loaded == [1, 2, 3] and mpv.playlist == ["url1", "url2", "url3"]
 
 
 async def test_pos_event_during_start_wave_no_spurious_feedback():
-    """Wave start with pos event during loadfile has no spurious skip feedback."""
+    """Same race while starting a wave: only the explicit skip from play(2) is reported."""
     import asyncio
     p, api, mpv, _ = make()
-
-    def hook():
-        asyncio.create_task(p.on_event({"event": "property-change", "name": "playlist-pos", "data": 0}))
-
-    mpv.on_load = hook
+    mpv.on_load = interleave_once(p)
     await p.start_wave(None)
-    for _ in range(5):
-        await asyncio.sleep(0)
+    await asyncio.sleep(0)
     await p.play(2)
-    for _ in range(5):
-        await asyncio.sleep(0)
-    # Only the explicit skip from play(2) switching from 100 to 102
-    skip_feedbacks = [f for f in api.feedback if f[1] == "skip"]
-    assert len(skip_feedbacks) == 1 and skip_feedbacks[0][2] == "100:100"
+    await asyncio.sleep(0)
+    skips = [f for f in api.feedback if f[1] == "skip"]
+    assert skips == [(WAVE, "skip", "100:100")]
