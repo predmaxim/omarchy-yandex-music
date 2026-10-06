@@ -32,6 +32,7 @@ Panel {
   property bool btnFocus: false
   property int head: -1           // cursor on root.controls (header buttons, or the wave screen's)
   property int srcCur: -1         // cursor on the wave screen's source row (Model.SOURCE_ROW)
+  property bool cursorPending: false  // just opened: the cursor goes to play/pause with the first state line
   property int askedAt: -1        // list length at the last "more" request
   property string sourceSig: ""
   property int seenIndex: -1
@@ -61,6 +62,11 @@ Panel {
     root.pos = root.music.position || 0
     root.posStamp = Date.now()
     refreshRows()
+    if (root.cursorPending && root.music.running) {
+      root.cursorPending = false
+      var c = Model.initialCursor(root.music)
+      root.srcCur = -1; root.btnFocus = false; root.head = c.head; root.cur = c.cur
+    }
   }
   onPendingIndexChanged: refreshRows()
 
@@ -159,6 +165,7 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       cur = -1; head = -1; srcCur = -1; btnFocus = false
+      cursorPending = true
       moveGate.reset()
       Qt.callLater(function() { if (list.contentHeight < root.listSpace) root.requestMore() })
       Qt.callLater(root.focusInput)
@@ -490,7 +497,7 @@ Panel {
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.heading
           cursorDelegate: Item {}
-          onTextEdited: { root.cur = -1; root.head = -1; root.srcCur = -1; searchDelay.restart() }
+          onTextEdited: { root.cur = -1; root.head = -1; root.srcCur = -1; root.cursorPending = false; searchDelay.restart() }
           onTextChanged: if (text === "") { searchDelay.stop(); root.send("search", { text: "" }) }
           Keys.onUpPressed: root.moveRow(-1)
           Keys.onDownPressed: root.moveRow(1)

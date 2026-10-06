@@ -141,3 +141,12 @@ function waveMood(st) {
   var w = [st.play_source, st.source].filter(function(s) { return s && s.type === "wave" })[0]
   return w ? w.mood : "all"
 }
+
+// Where the keyboard cursor starts when the window opens: on play/pause (▶ on the idle wave screen);
+// with nothing audible on a list tab, on the first row instead, so Enter does something (plays it).
+function initialCursor(st) {
+  var wave = waveControls(st)
+  if (wave.length) return { head: wave.indexOf(wave.length > 1 ? "toggle" : "start"), cur: -1 }
+  if (canToggle(st)) return { head: HEAD.indexOf("toggle"), cur: -1 }
+  return { head: -1, cur: st.running && st.auth === "ok" && rows(st, -1).length ? 0 : -1 }
+}
