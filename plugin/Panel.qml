@@ -558,6 +558,7 @@ Panel {
             implicitHeight: Math.max(Style.space(50), texts.implicitHeight + Style.spacing.rowPaddingX * 2)
             foreground: root.bar.foreground
             hasCursor: root.row === "list" && root.cur === index && root.col === 0
+            current: entry.model.current   // the playing row: the stock light fill under the marker
 
             MouseArea {
               id: rowArea
