@@ -18,8 +18,11 @@ Panel {
 
   readonly property var tr: I18n.translator(I18n.textLanguage(function(name) { return Quickshell.env(name) }))
   readonly property var music: link.music
-  readonly property var shown: Model.rows(root.music)
+  // Rebuilt only when the rows really change, so the list keeps its scroll.
+  property var shown: []
+  property string shownSig: ""
   readonly property bool loggedIn: root.music.running && root.music.auth === "ok"
+  readonly property bool hasTrack: root.loggedIn && !!root.music.track
 
   property int cur: -1
   property bool btnFocus: false
@@ -31,11 +34,28 @@ Panel {
 
   function send(name, args) { link.send(Model.cmd(name, args)) }
 
+  function refreshRows() {
+    var r = Model.rows(root.music)
+    var sig = JSON.stringify(r)
+    if (sig !== root.shownSig) { root.shownSig = sig; root.shown = r }
+  }
+  onMusicChanged: refreshRows()
+  Component.onCompleted: refreshRows()
+
+  function focusInput() {
+    if (root.loggedIn) field.forceActiveFocus()
+    else holder.forceActiveFocus()
+  }
+
   function moveRow(step) {
     root.btnFocus = false
-    if (root.head >= 0) { if (step > 0) { root.head = -1; root.cur = 0 } ; return }
+    if (root.head >= 0) {
+      if (step > 0 && root.shown.length > 0) { root.head = -1; root.cur = 0; moveGate.reset(); list.positionViewAtIndex(0, ListView.Contain) }
+      return
+    }
     var i = root.cur + step
-    if (i < 0) { root.cur = -1; root.head = 1; return }
+    if (i < 0) { if (root.hasTrack) { root.cur = -1; root.head = 1 } return }
+    if (root.shown.length === 0) return
     root.cur = Math.min(root.shown.length - 1, i)
     moveGate.reset()
     list.positionViewAtIndex(root.cur, ListView.Contain)
@@ -48,30 +68,40 @@ Panel {
   }
 
   function enter(event) {
-    if (root.head === 0) root.send("dislike")
-    else if (root.head === 1) root.send("like")
-    else if (root.cur >= 0 && root.btnFocus) root.waveFrom(root.cur)
-    else if (root.cur >= 0) root.playRow(root.cur)
+    var inList = root.cur >= 0 && root.cur < root.shown.length
+    if (root.head >= 0) { if (root.hasTrack) root.send(root.head === 0 ? "dislike" : "like") }
+    else if (inList && root.btnFocus) root.waveFrom(root.cur)
+    else if (inList) root.playRow(root.cur)
     else event.accepted = false
   }
 
   function playRow(i) {
+    if (i < 0 || i >= root.shown.length) return
     if (Model.searching(root.music)) { root.send("play-search", { index: i }); field.text = "" }
     else root.send("play", { index: i })
+    root.cur = -1; root.btnFocus = false
   }
 
   function waveFrom(i) {
+    if (i < 0 || i >= root.shown.length) return
     root.send("wave-track", { id: root.shown[i].id })
     field.text = ""
+    root.cur = -1; root.btnFocus = false
   }
 
-  onShownChanged: if (root.cur >= root.shown.length) root.cur = root.shown.length - 1
+  onShownChanged: {
+    if (root.shown.length === 0) { root.cur = -1; root.btnFocus = false }
+    else if (root.cur >= root.shown.length) root.cur = root.shown.length - 1
+    if (root.cur >= 0) Qt.callLater(function() { list.positionViewAtIndex(root.cur, ListView.Contain) })
+  }
+  onHasTrackChanged: if (!root.hasTrack) root.head = -1
+  onLoggedInChanged: Qt.callLater(root.focusInput)
 
   onOpenedChanged: {
     if (opened) {
       cur = -1; head = -1; btnFocus = false
       moveGate.reset()
-      Qt.callLater(function() { field.forceActiveFocus() })
+      Qt.callLater(root.focusInput)
     }
   }
 
@@ -97,6 +127,14 @@ Panel {
     WlrLayershell.keyboardFocus: visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
     MouseArea { anchors.fill: parent; onClicked: root.close() }
+
+    // Keys while the search field is hidden (login screen, no daemon).
+    Item {
+      id: holder
+      Keys.onEscapePressed: root.close()
+      Keys.onReturnPressed: if (root.music.running && root.music.auth === "none") root.send("login")
+      Keys.onEnterPressed: if (root.music.running && root.music.auth === "none") root.send("login")
+    }
 
     BorderSurface {
       id: card
@@ -264,7 +302,7 @@ Panel {
           }
           Keys.onEscapePressed: { if (text !== "") text = ""; else root.close() }
           Keys.onPressed: function(event) {
-            if (!(event.modifiers & Qt.ControlModifier)) return
+            if (!(event.modifiers & Qt.ControlModifier) || !root.hasTrack) return
             if (event.key === Qt.Key_L) { root.send("like"); event.accepted = true }
             else if (event.key === Qt.Key_D) { root.send("dislike"); event.accepted = true }
           }
