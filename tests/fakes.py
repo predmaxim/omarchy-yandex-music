@@ -7,24 +7,28 @@ def track(i, title=None):
 
 
 class FakeMpv:
-    """Records commands and mirrors loadfile/remove on a fake playlist."""
+    """Records commands and mirrors loadfile/remove on a fake playlist; ids: mpv's playlist entry ids."""
     def __init__(self, on_load=None):
-        self.calls, self.playlist = [], []
+        self.calls, self.playlist, self.ids, self.last_id = [], [], [], 0
         self.pos = -1  # Current playlist position
+        self.idle = False  # went idle at the end of its playlist (the entries stay)
         self.on_load = on_load
 
     async def command(self, *args):
         self.calls.append(args)
         if args[0] == "loadfile":
             url, mode = args[1], args[2]
+            self.last_id += 1
             if mode == "replace":
-                self.playlist = [url]
+                self.playlist, self.ids = [url], [self.last_id]
                 self.pos = 0
             elif mode == "append":
                 self.playlist.append(url)
+                self.ids.append(self.last_id)
             elif mode == "insert-at":
                 k = args[3]
                 self.playlist.insert(k, url)
+                self.ids.insert(k, self.last_id)
                 if k <= self.pos:
                     self.pos += 1
             if self.on_load:
@@ -35,10 +39,12 @@ class FakeMpv:
                     await result
         elif args[0] == "playlist-clear":
             self.playlist = self.playlist[self.pos:self.pos + 1]
+            self.ids = self.ids[self.pos:self.pos + 1]
             self.pos = 0
         elif args[0] == "playlist-remove":
             k = args[1]
             self.playlist.pop(k)
+            self.ids.pop(k)
             if k < self.pos:
                 self.pos -= 1
             elif k == self.pos:
@@ -48,13 +54,15 @@ class FakeMpv:
         elif args[0] == "playlist-prev":
             self.pos = max(self.pos - 1, 0)
         elif args[0] == "stop":
-            self.playlist = []
+            self.playlist, self.ids = [], []
             self.pos = -1
         elif args[0] == "get_property":
             if args[1] == "playlist-pos":
                 return self.pos
             if args[1] == "idle-active":
-                return not self.playlist
+                return self.idle or not self.playlist
+            if args[1].startswith("playlist/") and args[1].endswith("/id"):
+                return self.ids[int(args[1].split("/")[1])]  # IndexError: mpv's "property unavailable"
         return None
 
 
