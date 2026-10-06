@@ -3,7 +3,7 @@ const fs = require("fs")
 const assert = require("assert")
 const load = (file, names) =>
   new Function(fs.readFileSync(__dirname + "/" + file, "utf8").replace(".pragma library", "") + "; return { " + names + " }")()
-const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions")
+const M = load("Model.js", "OFFLINE, ICONS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position")
 const I = load("I18n.js", "TABLES, translator")
 const ru = I.translator("ru")
 
@@ -40,7 +40,16 @@ assert.strictEqual(M.subtitle(at({ error: "boom" }), ru), "Ошибка: boom")
 
 // Rows: queue with the playing one marked; search results while text is typed
 assert.deepStrictEqual(M.rows(st).map(r => r.current), [false, true])
+assert.deepStrictEqual(M.rows(st, 0).map(r => r.current), [true, false])   // optimistic marker
+assert.deepStrictEqual(M.rows(st, -1).map(r => r.current), [false, true])
 assert.strictEqual(M.searching(st), false)
+
+// Seek bar
+assert.deepStrictEqual([0, 5, 65, 3599, 61.9, undefined].map(M.fmtTime), ["0:00", "0:05", "1:05", "59:59", "1:01", "0:00"])
+const sp = at({ position: 10, duration: 100 })
+assert.strictEqual(M.position(sp, 2500), 12.5)
+assert.strictEqual(M.position(at({ position: 10, duration: 100, playing: false }), 2500), 10)
+assert.strictEqual(M.position(at({ position: 99, duration: 100 }), 5000), 100)
 const ss = at({ search: { text: "сплин", results: [{ id: "9", title: "Орбит", artists: "Сплин", album: "Гранатовый" }] } })
 assert.strictEqual(M.searching(ss), true)
 assert.deepStrictEqual(M.rows(ss), [{ id: "9", title: "Орбит", artists: "Сплин · Гранатовый", current: false }])

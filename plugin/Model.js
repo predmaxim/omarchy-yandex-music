@@ -14,7 +14,7 @@ var ICONS = {
 var MOOD_LABELS = { all: "Any", fun: "Fun", active: "Energetic", calm: "Calm", sad: "Sad" }
 
 var OFFLINE = { running: false, auth: "none", login: null, source: { type: "none", title: "", mood: "" }, moods: [],
-  playing: false, track: null, queue: [], index: -1, search: { text: "", results: [] }, error: null }
+  playing: false, track: null, queue: [], index: -1, position: 0, duration: 0, search: { text: "", results: [] }, error: null }
 
 function parse(line) {
   var s = null
@@ -53,13 +53,27 @@ function subtitle(st, tr) {
 
 function searching(st) { return !!(st.search && st.search.text) }
 
-function rows(st) {
+// pending: a row clicked a moment ago, marked before ymd confirms it.
+function rows(st, pending) {
+  var cur = pending >= 0 ? pending : st.index
   if (searching(st))
     return st.search.results.map(function(r) {
       return { id: r.id, title: r.title, artists: r.album ? r.artists + " · " + r.album : r.artists, current: false } })
-  return st.queue.map(function(r, i) { return { id: r.id, title: r.title, artists: r.artists, current: i === st.index } })
+  return st.queue.map(function(r, i) { return { id: r.id, title: r.title, artists: r.artists, current: i === cur } })
 }
 
 function moodOptions(st, tr) {
   return (st.moods || []).map(function(m) { return { value: m, label: tr(MOOD_LABELS[m] || m) } })
+}
+
+function fmtTime(s) {
+  s = Math.max(0, Math.floor(s || 0))
+  var r = s % 60
+  return Math.floor(s / 60) + ":" + (r < 10 ? "0" : "") + r
+}
+
+// Position now: the one from the state line plus the time since (only while playing).
+function position(st, elapsedMs) {
+  var p = (st.position || 0) + (st.playing ? elapsedMs / 1000 : 0)
+  return st.duration > 0 ? Math.min(p, st.duration) : p
 }
