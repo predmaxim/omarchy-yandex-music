@@ -1,0 +1,139 @@
+from ymd.player import Player, WAVE
+from tests.fakes import FakeApi, FakeMpv
+
+
+def make(**kw):
+    api, mpv, n = FakeApi(**kw), FakeMpv(), []
+    return Player(api, mpv, lambda: n.append(1)), api, mpv, n
+
+
+async def pos(p, i):
+    await p.on_event({"event": "property-change", "name": "playlist-pos", "data": i})
+
+
+async def test_likes_loads_window():
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    assert p.index == 0 and mpv.playlist == ["url0", "url1"] and p.loaded == [0, 1]
+    assert p.state()["source"] == {"type": "likes", "title": "", "mood": ""}
+
+
+async def test_play_middle_inserts_previous():
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    await p.play(2)
+    assert mpv.playlist == ["url1", "url2", "url3"] and p.loaded == [1, 2, 3]
+    await pos(p, 1)                      # mpv reports the shift after insert-at: no-op
+    assert p.index == 2
+
+
+async def test_next_from_media_keys_slides_window():
+    p, api, mpv, _ = make()
+    await p.start_likes(); await p.play(2)
+    await pos(p, 2)                      # mpv-mpris "next"
+    assert p.index == 3 and mpv.playlist == ["url2", "url3", "url4"] and p.loaded == [2, 3, 4]
+
+
+async def test_prev_from_media_keys_slides_back():
+    p, api, mpv, _ = make()
+    await p.start_likes(); await p.play(2)
+    await pos(p, 0)
+    assert p.index == 1 and mpv.playlist == ["url0", "url1", "url2"] and p.loaded == [0, 1, 2]
+
+
+async def test_next_at_end_of_likes_keeps_last():
+    p, api, mpv, _ = make(likes=2)
+    await p.start_likes(); await p.play(1)
+    assert mpv.playlist == ["url0", "url1"] and p.loaded == [0, 1]
+    await pos(p, 2)                      # out of range: ignored
+    assert p.index == 1
+
+
+async def test_wave_with_mood_feedback_and_skip():
+    p, api, mpv, _ = make()
+    await p.start_wave("calm")
+    assert api.settings == [(WAVE, "calm", "default")]
+    assert api.feedback[:2] == [(WAVE, "radioStarted", None), (WAVE, "trackStarted", "100:100")]
+    await p.on_event({"event": "end-file", "reason": "stop"})
+    await pos(p, 1)
+    assert api.feedback[-2:] == [(WAVE, "skip", "100:100"), (WAVE, "trackStarted", "101:100")]
+
+
+async def test_wave_eof_sends_finished():
+    p, api, mpv, _ = make()
+    await p.start_wave(None)
+    assert api.settings == []
+    await p.on_event({"event": "property-change", "name": "time-pos", "data": 180.0})
+    await p.on_event({"event": "end-file", "reason": "eof"})
+    await pos(p, 1)
+    assert (WAVE, "trackFinished", "100:100") in api.feedback
+
+
+async def test_error_end_does_not_send_finished():
+    p, api, mpv, _ = make()
+    await p.start_wave(None)
+    await p.on_event({"event": "end-file", "reason": "error"})
+    await pos(p, 1)
+    kinds = [f[1] for f in api.feedback]
+    assert "trackFinished" not in kinds and p.index == 1
+
+
+async def test_wave_refills_when_near_end():
+    p, api, mpv, _ = make()
+    await p.start_wave(None)
+    for i in range(1, 4):
+        await pos(p, min(i, 2))
+    assert api.rotor_calls[-1] == (WAVE, "104")
+    assert len(p.queue) == 10
+
+
+async def test_track_wave_uses_track_station_and_title():
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    await p.start_track_wave("3")
+    assert api.rotor_calls[0] == ("track:3", None)
+    assert p.state()["source"] == {"type": "track-wave", "title": "t3", "mood": ""}
+
+
+async def test_like_toggles_and_dislike_in_wave_skips():
+    p, api, mpv, _ = make()
+    await p.start_wave(None)
+    await p.like()
+    assert api.liked_add == ["100"] and p.state()["track"]["liked"] is True
+    await p.like()
+    assert api.liked_add == [] and p.state()["track"]["liked"] is False
+    await p.dislike()
+    assert api.disliked == ["100"] and mpv.calls[-1] == ("playlist-next",)
+
+
+async def test_search_and_play_from_results():
+    p, api, mpv, _ = make()
+    await p.search("кино")
+    assert api.searched == [("кино", "track")]
+    assert [r["id"] for r in p.state()["search"]["results"]] == ["900", "901"]
+    await p.play_search(1)
+    assert p.state()["source"] == {"type": "search", "title": "кино", "mood": ""}
+    assert p.queue[p.index]["id"] == "901"
+
+
+async def test_empty_search_clears():
+    p, api, mpv, _ = make()
+    await p.search("кино"); await p.search("   ")
+    assert p.state()["search"] == {"text": "", "results": []} and len(api.searched) == 1
+
+
+async def test_toggle_when_stopped_replays_current():
+    p, api, mpv, _ = make()
+    await p.start_likes(); await p.stop()
+    assert mpv.playlist == []
+    await p.toggle()
+    assert mpv.playlist == ["url0", "url1"]
+
+
+async def test_state_marks_playing_track():
+    p, api, mpv, _ = make()
+    await p.start_likes()
+    await p.on_event({"event": "property-change", "name": "pause", "data": False})
+    s = p.state()
+    assert s["index"] == 0 and s["playing"] is True and s["track"]["title"] == "t0"
+    assert s["moods"] == ["all", "fun", "active", "calm", "sad"]
