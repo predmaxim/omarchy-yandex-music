@@ -72,3 +72,24 @@ async def test_run_forever_restarts(tmp_path):
         except asyncio.CancelledError:
             pass
         await mpv.stop()
+
+async def test_dispatcher_catches_exceptions(tmp_path):
+    """Dispatcher catches and logs exceptions from on_event without stopping."""
+    events = []
+
+    async def on_event(e):
+        events.append(e)
+        if len(events) == 1:
+            raise ValueError("test error")
+
+    mpv = Mpv(str(tmp_path / "mpv.sock"), on_event)
+    await mpv.start()
+    try:
+        await mpv.command("set_property", "pause", True)
+        await asyncio.sleep(0.2)
+        await mpv.command("set_property", "pause", False)
+        await asyncio.sleep(0.2)
+        # Even though first event raised, second event should still fire
+        assert len(events) >= 2
+    finally:
+        await mpv.stop()
