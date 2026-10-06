@@ -174,19 +174,15 @@ async def test_search_with_none_tracks():
 
 
 async def test_like_with_no_current_track():
-    """like() returns without API call when index is invalid."""
+    """like() returns without API call when nothing has played."""
     p, api, mpv, _ = make()
-    p.queue = []
-    p.index = -1
     await p.like()
     assert api.liked_add == []
 
 
 async def test_dislike_with_no_current_track():
-    """dislike() returns without API call when index is invalid."""
+    """dislike() returns without API call when nothing has played."""
     p, api, mpv, _ = make()
-    p.queue = []
-    p.index = -1
     await p.dislike()
     assert api.disliked == [] and mpv.calls == []
 
@@ -369,11 +365,11 @@ async def test_sources_do_not_autoplay():
     assert [f[1] for f in api.feedback] == ["radioStarted", "trackStarted"]
 
 
-async def test_new_source_keeps_playing_track_alone():
+async def test_new_source_keeps_playing_window():
     p, api, mpv, _ = make()
     await likes(p)
     await p.start_wave(None)
-    assert mpv.playlist == ["url0"] and p.loaded == [] and p.playing is True
+    assert mpv.playlist == ["url0", "url1"] and p.loaded == [0, 1] and p.playing is True
 
 
 async def test_track_wave_plays_immediately():
@@ -600,10 +596,6 @@ async def test_source_switch_keeps_audible_track():
     api.liked_add = ["0"]
     await p.like()
     assert s["track"]["liked"] is True and p.state()["track"]["liked"] is False   # acted on t0, not the queue
-    await p.prev()
-    assert ("seek", 0, "absolute") in mpv.calls
-    await p.next()                                   # nothing marked: first queue item
-    assert p.index == 0 and p.now["id"] == "100" and p.state()["track"]["title"] == "t100"
 
 
 async def test_dislike_targets_audible_track():
@@ -611,7 +603,7 @@ async def test_dislike_targets_audible_track():
     await likes(p)
     await p.start_wave(None)
     await p.dislike()
-    assert api.disliked == ["0"] and p.index == 0
+    assert api.disliked == ["0"] and mpv.calls[-1] == ("playlist-next",)
 
 
 # --- fix round 2 ---
@@ -620,21 +612,13 @@ async def test_dislike_targets_audible_track():
 async def test_stop_then_toggle_resumes_audible_track():
     p, api, mpv, _ = make()
     await likes(p); await p.play(2); await p.settle()
-    await p.start_wave(None)                 # detached
+    await p.start_wave(None)                 # browsing another source
     await p.stop()
     await p.toggle(); await p.settle()
-    assert mpv.playlist == ["url2"] and p.playing is True and p.state()["track"]["id"] == "2"
+    assert mpv.playlist == ["url1", "url2", "url3"] and p.playing is True and p.state()["track"]["id"] == "2"
     mpv.calls.clear()
     await p.toggle()
     assert mpv.calls == [("get_property", "idle-active"), ("cycle", "pause")]
-
-
-async def test_stop_then_toggle_with_index_resumes_now_not_marker():
-    p, api, mpv, _ = make()
-    await likes(p); await p.play(1); await p.settle()
-    await p.stop(); p.index = 3
-    await p.toggle(); await p.settle()
-    assert p.index == 1 and mpv.playlist[p.loaded.index(1)] == "url1"
 
 
 async def test_eof_when_neighbour_arrived_after_idle():
@@ -648,7 +632,7 @@ async def test_eof_when_neighbour_arrived_after_idle():
 async def test_station_more_is_capped_and_search_empty_page_ends():
     p, api, mpv, _ = make()
     await p.start_wave(None)
-    p.queue += [p.queue[0]] * 100
+    p.queue.extend([p.queue[0]] * 100)
     assert p.state()["has_more"] is False
     s = NS(results=[track(900)], total=5)
     p2, api2, _m, _n = make(search_tracks=s)
@@ -656,3 +640,82 @@ async def test_station_more_is_capped_and_search_empty_page_ends():
     api2.search_tracks.results = []
     await p2.more()
     assert p2.state()["has_more"] is False
+
+
+# --- v3: the browsed list is not the play queue ---
+
+
+async def test_browsing_another_source_keeps_play_queue():
+    p, api, mpv, _ = make(likes=10)
+    await p.start_likes(); await p.play(3); await p.settle()
+    calls = len(mpv.calls)
+    await p.start_wave(None); await p.settle()
+    assert mpv.calls[calls:] == [] and p.loaded == [2, 3, 4]          # switching sources never touches mpv
+    assert p.state()["index"] == -1 and p.state()["track"]["id"] == "3"
+    assert p.state()["source"]["type"] == "wave" and p.state()["play_source"]["type"] == "likes"
+    await p.on_event({"event": "end-file", "reason": "eof"})
+    await pos(p, 2)                                                   # mpv went on to its next entry
+    assert p.now["id"] == "4" and mpv.playlist == ["url3", "url4", "url5"] and p.loaded == [3, 4, 5]
+    assert p.state()["index"] == -1 and p.queue[0]["id"] == "100"      # still browsing the wave
+    await p.start_likes()
+    assert p.state()["index"] == 4 and p.queue is p.play_queue         # back to likes: marker on the audible row
+
+
+async def test_eof_at_window_edge_while_browsing_plays_from_play_queue():
+    p, api, mpv, _ = make(likes=10)
+    await p.start_likes()
+    async def boom(*a, **k): raise OSError("x")
+    p._append_next = boom
+    await p.play(3); await p.settle()
+    await p.start_wave(None)
+    await p.on_event({"event": "end-file", "reason": "eof"})
+    assert p.now["id"] == "4" and mpv.playlist == ["url4"] and p.state()["index"] == -1
+
+
+async def test_next_prev_while_browsing_move_within_play_queue():
+    p, api, mpv, _ = make(likes=10)
+    await p.start_likes(); await p.play(3); await p.settle()
+    await p.start_wave(None)
+    await p.next(); await pos(p, mpv.pos)
+    assert p.now["id"] == "4"
+    await p.prev(); await pos(p, mpv.pos)
+    await p.prev(); await pos(p, mpv.pos)
+    assert p.now["id"] == "2" and p.queue[0]["id"] == "100" and p.state()["index"] == -1
+    await p.dislike(); await pos(p, mpv.pos)
+    assert api.disliked == ["2"] and p.now["id"] == "3"
+
+
+async def test_playing_a_browsed_row_switches_play_queue():
+    p, api, mpv, _ = make(likes=10)
+    await p.start_likes(); await p.play(3); await p.settle()
+    await p.start_wave(None)
+    await p.play(1); await p.settle()
+    assert p.play_queue is p.queue and p.now["id"] == "101" and p.state()["index"] == 1
+    assert p.state()["play_source"]["type"] == "wave" and mpv.playlist == ["url100", "url101", "url102"]
+    assert [f[1] for f in api.feedback] == ["radioStarted", "trackStarted"]
+    await p.start_likes()
+    assert p.state()["index"] == -1 and p.now["id"] == "101"
+
+
+async def test_failed_play_of_browsed_row_keeps_play_queue():
+    p, api, mpv, _ = make(likes=10)
+    await p.start_likes(); await p.play(3); await p.settle()
+    await p.start_wave(None)
+    async def boom(*a, **k): raise OSError("net")
+    api.tracks_download_info = boom
+    with pytest.raises(OSError):
+        await p.play(0)
+    assert p.play_source["type"] == "likes" and p.now["id"] == "3" and p.index == 3
+    assert p.state()["index"] == -1
+
+
+async def test_play_queue_keeps_its_mood_while_another_is_browsed():
+    p, api, mpv, _ = make()
+    await wave(p, "calm")
+    await p.start_wave("fun")
+    assert [s[1] for s in api.settings] == ["calm", "fun"]
+    for i in range(1, 4):
+        await pos(p, min(i, 2))                                       # the play queue refills
+    assert [s[1] for s in api.settings] == ["calm", "fun", "calm"]
+    await p.start_wave("calm")
+    assert p.queue is p.play_queue and p.state()["index"] == p.index

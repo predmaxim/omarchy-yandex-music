@@ -1,7 +1,11 @@
-"""Queue, sources and the 3-track window kept in mpv's playlist.
+"""Sources, the play queue and the 3-track window kept in mpv's playlist.
 
+The window shows one Feed (self.feed: a source's list and how it pages), the
+play queue is another (self.play_feed); they are the same object while the window
+shows the playing source, so a page fetched by either is in both. Browsing
+never touches mpv: only playing a row makes its feed the play queue.
 mpv holds at most [previous, current, next]; self.loaded maps those playlist
-positions to queue indices. Every playlist-pos change (media keys through
+positions to play-queue indices. Every playlist-pos change (media keys through
 mpv-mpris, end of track, our own insert-at) goes through _on_pos, which slides
 the window and sends wave feedback. A stream link is fetched right before it
 is loaded: links expire.
@@ -24,20 +28,31 @@ MAX_STATION_ROWS = 100  # the list stops growing from scrolling here
 IDS_TTL = 300
 
 
+class Feed:
+    """A track list and where its next page comes from."""
+    def __init__(self, source, station=None):
+        self.source, self.station, self.tracks, self.started = source, station, [], False  # started: radioStarted sent
+
+
 class Player:
     def __init__(self, api, mpv, notify, cache_dir=None, download=None):
         self.api, self.mpv, self.notify = api, mpv, notify
         self.cache_dir, self.download = cache_dir or diskcache.DIR, download or diskcache.fetch
         self.urls, self.tasks, self.downloading = {}, set(), set()
-        self.gen, self.duration, self.faded, self.radio_pending = 0, 0.0, False, False
-        self.queue, self.index, self.loaded = [], -1, []
-        self.source = {"type": "none", "title": "", "mood": ""}
-        self.station, self.liked = None, set()
+        self.gen, self.duration, self.faded, self.wave_mood = 0, 0.0, False, None
+        self.feed = self.play_feed = Feed({"type": "none", "title": "", "mood": ""})
+        self.index, self.loaded, self.liked = -1, [], set()  # index: of the audible track in the play queue
         self.playing, self.time_pos, self.last_end, self.error = False, 0.0, None, None
         self.search_text, self.results, self.search_page, self.search_total = "", [], 0, 0
+        # like_off pages the one likes feed: browsing Liked while it plays reuses the play queue
         self.like_ids, self.like_ids_at, self.like_off, self.likes_page1 = [], None, 0, None
-        self.loading, self.now = False, None  # now: the track mpv plays, whatever the queue shows
+        self.loading, self.now = False, None  # now: the track mpv plays (play_queue[index])
         self.lock = asyncio.Lock()
+
+    queue = property(lambda self: self.feed.tracks)
+    source = property(lambda self: self.feed.source)
+    play_queue = property(lambda self: self.play_feed.tracks)
+    play_source = property(lambda self: self.play_feed.source)
 
     # --- sources -----------------------------------------------------------
     async def load_likes(self):
@@ -50,40 +65,45 @@ class Player:
             self.like_ids_at = time.monotonic()
             self.liked = set(self.like_ids)
 
+    def _show(self, source, station=None, reuse=True):
+        """Lock held. Point the window at a source; the playing one is shown as is (True: nothing to fetch)."""
+        same = reuse and (self.play_feed.source, self.play_feed.station) == (source, station)
+        self.feed = self.play_feed if same else Feed(source, station)
+        self.loading = not same
+        self.notify()  # the source switch shows at once; the first page follows
+        return same
+
     async def start_likes(self):
         async with self.lock:
-            self.station, self.queue = None, []
-            self.source = {"type": "likes", "title": "", "mood": ""}
-            await self._detach()
-            self.loading = True
-            self.notify()  # the source switch shows at once; the first page follows
+            if self._show({"type": "likes", "title": "", "mood": ""}):
+                return
+            self.like_off = 0  # a new likes feed: the old one is neither shown nor playing
             try:
                 await self._likes_ids()
                 if not self.like_ids:
                     self.error = "nothing to play"; return
                 first = tuple(self.like_ids[:PAGE])
                 if self.likes_page1 and self.likes_page1[0] == first:
-                    self.queue, self.like_off = list(self.likes_page1[1]), len(first)
+                    self.feed.tracks, self.like_off = list(self.likes_page1[1]), len(first)
                 else:
-                    self.like_off = 0
-                    await self._more_likes()
-                    self.likes_page1 = (first, list(self.queue))
+                    await self._more_likes(self.feed)
+                    self.likes_page1 = (first, list(self.feed.tracks))
             finally:
                 self.loading = False
                 self.notify()
 
-    async def _more_likes(self):
+    async def _more_likes(self, f):
         ids = self.like_ids[self.like_off:self.like_off + PAGE]
         if ids:
             self.like_off += len(ids)
-            self.queue += [tracks.info(t) for t in await self.api.tracks(ids)]
+            f.tracks += [tracks.info(t) for t in await self.api.tracks(ids)]
 
-    async def _refill(self):
-        """The queue is running out: next page / next rotor batch."""
-        if self.station:
-            await self._fetch_station()
-        elif self.source["type"] == "likes":
-            await self._more_likes()
+    async def _extend(self, f):
+        """Next page / next rotor batch of a feed (the play queue running out, or the window scrolled)."""
+        if f.station:
+            await self._fetch_station(f)
+        elif f.source["type"] == "likes":
+            await self._more_likes(f)
 
     async def more(self):
         """The list was scrolled to its end: append the next page of what is shown."""
@@ -101,7 +121,7 @@ class Player:
                     if not page:
                         self.search_total = len(self.results)
                 else:
-                    await self._refill()
+                    await self._extend(self.feed)
             finally:
                 self.loading = False
                 self.notify()
@@ -109,13 +129,11 @@ class Player:
     def _has_more(self):
         if self.search_text:
             return len(self.results) < self.search_total
-        if self.station:
+        if self.feed.station:
             return len(self.queue) < MAX_STATION_ROWS
         return self.source["type"] == "likes" and self.like_off < len(self.like_ids)
 
     async def start_wave(self, mood):
-        if mood:
-            await self.api.rotor_station_settings2(WAVE, mood, "default", language="any")
         await self._start_station(WAVE, {"type": "wave", "title": "", "mood": mood or ""})
 
     async def start_track_wave(self, track_id):
@@ -125,34 +143,27 @@ class Player:
 
     async def _start_station(self, station, source, play=False):
         async with self.lock:
-            self.station, self.queue, self.source = station, [], source
-            await self._detach()
-            self.loading = True
-            self.notify()  # the source switch shows at once; the first batch follows
+            if self._show(source, station, reuse=not play):  # wave by a track always starts afresh
+                return
             try:
-                await self._fetch_station()
+                await self._fetch_station(self.feed)
             finally:
                 self.loading = False
             if not self.queue:
                 self.error = "nothing to play"; self.notify(); return
-            self.radio_pending = True  # radioStarted goes out with the first play
             if play:
-                await self._play(0)
+                await self._play(0, feed=self.feed)
             else:
                 self.notify()
 
-    async def _detach(self):
-        """New source: forget the old window; a track that is playing keeps playing alone."""
-        self.gen += 1
-        self.index, self.radio_pending = -1, False
-        if self.loaded:
-            await self.mpv.command("playlist-clear")  # keeps only the current entry
-        self.loaded = []
-
-    async def _fetch_station(self):
-        last = self.queue[-1]["id"] if self.queue else None
-        r = await self.api.rotor_station_tracks(self.station, queue=last)
-        self.queue += [tracks.info(s.track) for s in (r.sequence if r else None) or [] if s.track]
+    async def _fetch_station(self, f):
+        mood = f.source["mood"]
+        if f.station == WAVE and mood and mood != self.wave_mood:  # one station, two moods: browsed and playing
+            await self.api.rotor_station_settings2(WAVE, mood, "default", language="any")
+            self.wave_mood = mood
+        last = f.tracks[-1]["id"] if f.tracks else None
+        r = await self.api.rotor_station_tracks(f.station, queue=last)
+        f.tracks += [tracks.info(s.track) for s in (r.sequence if r else None) or [] if s.track]
 
     async def search(self, text):
         async with self.lock:
@@ -169,9 +180,9 @@ class Player:
 
     async def play_search(self, i):
         async with self.lock:
-            self.station, self.queue = None, list(self.results)
-            self.source = {"type": "search", "title": self.search_text, "mood": ""}
-            await self._play(i)
+            self.feed = Feed({"type": "search", "title": self.search_text, "mood": ""})
+            self.feed.tracks = list(self.results)
+            await self._play(i, feed=self.feed)
 
     # --- playback ------------------------------------------------------------
     def _spawn(self, coro):
@@ -190,9 +201,7 @@ class Player:
         return f if f.exists() else None
 
     async def _url(self, i):
-        return await self._url_for(self.queue[i]["id"])
-
-    async def _url_for(self, tid):
+        tid = self.play_queue[i]["id"]
         if f := self._local(tid):
             os.utime(f)  # LRU: touch on play
             return str(f)
@@ -208,31 +217,35 @@ class Player:
         await self.mpv.command("loadfile", url, mode, index, FADE_IN)
 
     async def play(self, i):
+        """Row i of the window: its feed becomes the play queue."""
         async with self.lock:
-            await self._play(i)
+            await self._play(i, feed=self.feed)
 
-    async def _play(self, i, kind="skip"):
+    async def _play(self, i, kind="skip", feed=None):
         """Internal play without lock; must be called while holding self.lock.
 
+        Plays row i of `feed` (it becomes the play queue) or of the play queue.
         Only the current track's link is fetched before it starts; neighbours,
         feedback, prefetch and the disk copy follow in _after_play.
         """
-        if not 0 <= i < len(self.queue):
+        feed = feed or self.play_feed
+        if not 0 <= i < len(feed.tracks):
             self.error = "nothing to play"; self.notify(); return
-        prev = (self.index, self.time_pos, self.duration)
+        prev = (self.play_feed, self.index, self.time_pos, self.duration)
         skip = None
-        if self.station and 0 <= self.index < len(self.queue) and self.loaded:
-            skip = (self.station, kind, self.queue[self.index]["fid"], self.time_pos)
+        if self.play_feed.station and 0 <= self.index < len(self.play_queue) and self.loaded:
+            skip = (self.play_feed.station, kind, self.play_queue[self.index]["fid"], self.time_pos)
         prev_gen, prev_faded = self.gen, self.faded
         self.gen += 1
         gen = self.gen
+        self.play_feed = feed
         self.index, self.error, self.time_pos, self.duration, self.last_end = i, None, 0.0, 0.0, None
         self.faded = False
         self.notify()  # the marker moves before any network call
 
         def restore():
-            # nothing new was loaded: the old track keeps playing, with its window and marker
-            self.index, self.time_pos, self.duration = prev
+            # nothing new was loaded: the old track keeps playing, with its queue, window and marker
+            self.play_feed, self.index, self.time_pos, self.duration = prev
             self.gen, self.faded = prev_gen, prev_faded
 
         try:
@@ -244,9 +257,9 @@ class Player:
                     break
                 playable_i += 1
                 # Fetch more tracks for stations if needed
-                if playable_i >= len(self.queue):
-                    await self._refill()
-                if playable_i >= len(self.queue):
+                if playable_i >= len(self.play_queue):
+                    await self._extend(self.play_feed)
+                if playable_i >= len(self.play_queue):
                     # No playable tracks found: mpv keeps what it had
                     restore()
                     self.error = "track unavailable"
@@ -258,7 +271,7 @@ class Player:
             restore()  # the marker follows what mpv plays
             self.notify()
             raise
-        self.now = self.queue[playable_i]
+        self.now = self.play_queue[playable_i]
         self.loaded = [playable_i]  # before anything else can fail: mpv holds exactly this
         self._spawn(self._after_play(gen, playable_i, skip))
         await self.mpv.command("set_property", "pause", False)  # pause is global in mpv
@@ -278,24 +291,24 @@ class Player:
                     if prev_url is not None:
                         await self._load(prev_url, "insert-at", 0)
                         self.loaded.insert(0, i - 1)
-                if self.radio_pending:
-                    self.radio_pending = False
-                    await self._send(self.station, "radioStarted")
+                if self.play_feed.station and not self.play_feed.started:  # radioStarted goes out with the first play
+                    self.play_feed.started = True
+                    await self._send(self.play_feed.station, "radioStarted")
                 await self._feedback("trackStarted", i)
-            await self._cache_liked(i)
+                tid = self.play_queue[i]["id"]
+            await self._cache_liked(tid)
         except Exception as e:
             log.warning("after play: %s", e)
 
     async def _prefetch(self, n):
         try:
-            if n < len(self.queue):
+            if n < len(self.play_queue):
                 await self._url(n)
         except Exception as e:
             log.warning("prefetch: %s", e)
 
-    async def _cache_liked(self, i):
+    async def _cache_liked(self, t):
         """Keep a disk copy of a liked track that is playing from a stream link."""
-        t = self.queue[i]["id"] if 0 <= i < len(self.queue) else None
         hit = self.urls.get(t)
         if t not in self.liked or t in self.downloading or self._local(t) or not hit:
             return
@@ -315,15 +328,16 @@ class Player:
 
     async def reload(self):
         """mpv restarted: load the current track again."""
-        if 0 <= self.index < len(self.queue):
-            self.loaded = []  # no skip feedback: the old mpv playlist is gone
-            await self.play(self.index)
+        async with self.lock:
+            if 0 <= self.index < len(self.play_queue):
+                self.loaded = []  # no skip feedback: the old mpv playlist is gone
+                await self._play(self.index)
 
     async def _append_next(self):
         n = self.index + 1
-        if n >= len(self.queue) - 1:
-            await self._refill()
-        if n < len(self.queue):
+        if n >= len(self.play_queue) - 1:
+            await self._extend(self.play_feed)
+        if n < len(self.play_queue):
             url = await self._url(n)
             if url is not None:
                 await self._load(url, "append")
@@ -335,8 +349,8 @@ class Player:
         if p is None or not 0 <= p < len(self.loaded) or self.loaded[p] == self.index:
             return
         old, self.index = self.index, self.loaded[p]
-        self.now = self.queue[self.index]
-        if self.station and self.last_end != "error":
+        self.now = self.play_queue[self.index]
+        if self.play_feed.station and self.last_end != "error":
             await self._feedback("trackFinished" if self.last_end == "eof" else "skip", old)
         self.time_pos, self.duration, self.faded = 0.0, 0.0, False
         self.last_end = None
@@ -358,11 +372,11 @@ class Player:
                     self.loaded.insert(0, self.index - 1)
         await self._feedback("trackStarted", self.index)
         self.notify()
-        self._spawn(self._cache_liked(self.index))
+        self._spawn(self._cache_liked(self.now["id"]))
 
     async def _feedback(self, kind, i):
-        if self.station:
-            await self._send(self.station, kind, self.queue[i]["fid"], self.time_pos)
+        if self.play_feed.station:
+            await self._send(self.play_feed.station, kind, self.play_queue[i]["fid"], self.time_pos)
 
     async def _send(self, station, kind, fid=None, secs=None):
         """Wave feedback must never break playback: log and carry on."""
@@ -389,9 +403,9 @@ class Player:
                 async with self.lock:  # mpv has nothing after this track (or went idle): advance ourselves
                     n = self.index + 1
                     edge = self.loaded[-1:] == [self.index]
-                    if edge and n >= len(self.queue):
-                        await self._refill()
-                    if n < len(self.queue) and (edge or await self._idle()):
+                    if edge and n >= len(self.play_queue):
+                        await self._extend(self.play_feed)
+                    if n < len(self.play_queue) and (edge or await self._idle()):
                         await self._play(n, "trackFinished")
             return
         if msg.get("event") != "property-change":
@@ -431,23 +445,9 @@ class Player:
             if not await self._idle():
                 await self.mpv.command("cycle", "pause")  # mpv still holds a track
             elif self.now:
-                await self._resume_now()
+                await self._play(self.index)  # mpv is idle: the audible track again, with its window
             elif self.queue:
-                await self._play(max(self.index, 0))
-
-    async def _resume_now(self):
-        """mpv is idle: play the audible track again, from the queue if it is in it."""
-        for i, t in enumerate(self.queue):
-            if t["id"] == self.now["id"]:
-                return await self._play(i)
-        url = await self._url_for(self.now["id"])
-        if url is not None:
-            self.gen += 1
-            self.time_pos, self.duration, self.faded, self.loaded = 0.0, 0.0, False, []
-            await self._load(url, "replace")
-            await self.mpv.command("set_property", "pause", False)
-            self.playing = True
-            self.notify()
+                await self._play(0, feed=self.feed)
 
     async def stop(self):
         async with self.lock:
@@ -468,16 +468,12 @@ class Player:
         self.notify()
 
     async def _step(self, d, kind="skip"):
-        """Lock held. At the edge of the window (neighbour not loaded) play from the queue."""
+        """Lock held. At the edge of the window (neighbour not loaded) play from the play queue."""
         n = self.index + d
-        if self.index < 0 and d < 0 and self.now:  # detached track: previous restarts it
-            await self.mpv.command("seek", 0, "absolute")
-            self.time_pos = 0.0; self.notify()
-            return
         if n >= 0 and (not self.loaded or self.loaded[-1 if d > 0 else 0] == self.index):
-            if d > 0 and n >= len(self.queue):
-                await self._refill()
-            if n < len(self.queue):
+            if d > 0 and n >= len(self.play_queue):
+                await self._extend(self.play_feed)
+            if n < len(self.play_queue):
                 await self._play(n, kind)
                 return
         await self.mpv.command("playlist-next" if d > 0 else "playlist-prev")
@@ -518,8 +514,9 @@ class Player:
         cur = self.now
         track = dict(cur, liked=cur["id"] in self.liked) if cur else None
         row = lambda t: {"id": t["id"], "title": t["title"], "artists": t["artists"]}
-        return {"source": self.source, "moods": MOODS, "playing": self.playing, "track": track,
-                "queue": [row(t) for t in self.queue], "index": self.index,
+        return {"source": self.source, "play_source": self.play_source, "moods": MOODS,
+                "playing": self.playing, "track": track, "queue": [row(t) for t in self.queue],
+                "index": self.index if self.feed is self.play_feed else -1,  # the audible row, if the window shows it
                 "position": self.time_pos, "duration": self.duration,
                 "has_more": self._has_more(), "loading": self.loading,
                 "search": {"text": self.search_text,

@@ -18,7 +18,8 @@ var HEAD = ["prev", "toggle", "next", "dislike", "like"]
 
 var MOOD_LABELS = { all: "Any", fun: "Fun", active: "Energetic", calm: "Calm", sad: "Sad" }
 
-var OFFLINE = { running: false, auth: "none", login: null, source: { type: "none", title: "", mood: "" }, moods: [],
+var OFFLINE = { running: false, auth: "none", login: null, source: { type: "none", title: "", mood: "" },
+  play_source: { type: "none", title: "", mood: "" }, moods: [],
   playing: false, track: null, queue: [], index: -1, position: 0, duration: 0, has_more: false, loading: false, search: { text: "", results: [] }, error: null }
 
 function parse(line) {
@@ -54,7 +55,7 @@ function sourceName(src, tr) {
 
 function subtitle(st, tr) {
   if (st.error) return tr("Error: %1", tr(st.error))
-  var parts = [st.track ? st.track.artists : "", sourceName(st.source, tr)].filter(function(p) { return p })
+  var parts = [st.track ? st.track.artists : "", sourceName(st.play_source || st.source, tr)].filter(function(p) { return p })
   return parts.join(" · ")
 }
 

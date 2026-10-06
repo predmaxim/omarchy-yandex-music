@@ -42,6 +42,9 @@ assert.strictEqual(M.subtitle(at({ source: { type: "likes", title: "", mood: "" 
 assert.strictEqual(M.subtitle(at({ source: { type: "track-wave", title: "Кукушка", mood: "" } }), ru), "Кино · Волна по треку «Кукушка»")
 assert.strictEqual(M.subtitle(at({ source: { type: "search", title: "сплин", mood: "" } }), ru), "Кино · Поиск «сплин»")
 assert.strictEqual(M.subtitle(at({ error: "boom" }), ru), "Ошибка: boom")
+// The source named is the one the audible track plays from, not the one browsed
+assert.strictEqual(M.subtitle(at({ source: { type: "likes", title: "", mood: "" }, play_source: { type: "wave", title: "", mood: "calm" } }), ru), "Кино · Моя волна · Спокойное")
+assert.deepStrictEqual(M.OFFLINE.play_source, { type: "none", title: "", mood: "" })
 
 // Rows: queue with the playing one marked; search results while text is typed
 assert.deepStrictEqual(M.rows(st).map(r => r.current), [false, true])
