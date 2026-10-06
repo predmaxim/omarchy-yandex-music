@@ -8,12 +8,11 @@ def track(id_=1, album=7, title="Кукушка", artists=("Кино",), cover="
 
 def test_info():
     assert tracks.info(track()) == {"id": "1", "fid": "1:7", "title": "Кукушка", "artists": "Кино",
-                                    "album": "Звезда", "cover": "https://avatars.yandex.net/x/200x200",
-                                    "cover_big": "https://avatars.yandex.net/x/600x600"}
+                                    "album": "Звезда", "cover": "https://avatars.yandex.net/x/200x200"}
 
 def test_info_without_album_and_cover():
     t = track(cover=None); t.albums = []
-    assert tracks.info(t)["album"] == "" and tracks.info(t)["cover"] == "" == tracks.info(t)["cover_big"]
+    assert tracks.info(t)["album"] == "" and tracks.info(t)["cover"] == ""
 
 def test_best_link_prefers_full_mp3_highest_bitrate():
     infos = [NS(codec="mp3", bitrate_in_kbps=320, preview=True, direct_link="p"),

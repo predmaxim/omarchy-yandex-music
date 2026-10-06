@@ -818,12 +818,10 @@ async def test_covers_cached_on_disk_and_served_as_files():
     seen = []
     p.notify = lambda: seen.append((p.state()["track"] or {}).get("cover"))
     await likes(p)
-    s = p.state()["track"]
-    big = "https://avatars.yandex.net/0/600x600"
-    assert s["cover"] == f"file://{cover_file(p, 'https://avatars.yandex.net/0/200x200')}"
-    assert s["cover_big"] == f"file://{cover_file(p, big)}" and cover_file(p, big).exists()
-    assert seen[-1].startswith("file://")                                   # the window hears about the local copy
-    assert cover_file(p, "https://avatars.yandex.net/1/600x600").exists()   # the next track's, prefetched
+    f = cover_file(p, "https://avatars.yandex.net/0/200x200")
+    assert p.state()["track"]["cover"] == f.as_uri() and f.exists()
+    assert seen[-1] == f.as_uri()                                           # the window hears about the local copy
+    assert cover_file(p, "https://avatars.yandex.net/1/200x200").exists()   # the next track's, prefetched
     assert not list(p.covers_dir.glob("*.part"))
 
 
@@ -832,9 +830,18 @@ async def test_cover_not_downloaded_yet_is_the_remote_url():
     for t in api.likes:
         t.cover_uri = f"avatars.yandex.net/{t.id}/%%"
     await likes(p)
-    s = p.state()["track"]
-    assert (s["cover"], s["cover_big"]) == ("https://avatars.yandex.net/0/200x200", "https://avatars.yandex.net/0/600x600")
+    assert p.state()["track"]["cover"] == "https://avatars.yandex.net/0/200x200"
     assert not cover_file(p, "https://avatars.yandex.net/0/200x200").exists()
+
+
+async def test_album_cover_fetched_as_the_next_tracks_notifies_for_the_audible_one():
+    p, api, mpv, n = make(download=fake_download)
+    for t in api.likes:
+        t.cover_uri = "avatars.yandex.net/album/%%"       # one album, one cover
+    await p.start_likes()
+    p.now, before = p.queue[0], len(n)
+    await p._fetch_cover(p.queue[1])
+    assert len(n) > before and p.state()["track"]["cover"].startswith("file://")
 
 
 def test_trim_covers_by_pattern(tmp_path):
@@ -844,7 +851,6 @@ def test_trim_covers_by_pattern(tmp_path):
         f = tmp_path / f"{i}.jpg"; f.write_bytes(b"x" * 10); os.utime(f, (100 + i, 100 + i))
     diskcache.trim(tmp_path, 20, "*.jpg")
     assert sorted(f.name for f in tmp_path.glob("*.jpg")) == ["1.jpg", "2.jpg"]
-    assert diskcache.COVERS.name == "covers" and diskcache.COVER_LIMIT == 200 << 20
 
 
 # --- v5 ---
