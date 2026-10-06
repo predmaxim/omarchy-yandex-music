@@ -57,7 +57,7 @@ Panel {
   onPendingIndexChanged: refreshRows()
 
   function requestMore() {
-    if (!Model.wantMore(root.music, root.shown.length, root.askedAt)) return
+    if (!root.opened || !Model.wantMore(root.music, root.shown.length, root.askedAt)) return
     root.askedAt = root.shown.length
     root.send("more")
   }
@@ -123,7 +123,6 @@ Panel {
     if (root.shown.length === 0) { root.cur = -1; root.btnFocus = false }
     else if (root.cur >= root.shown.length) root.cur = root.shown.length - 1
     if (root.cur >= 0) Qt.callLater(function() { list.positionViewAtIndex(root.cur, ListView.Contain) })
-    Qt.callLater(root.requestMore)   // a short list that does not fill the window
   }
   onHasTrackChanged: if (!root.hasTrack) root.head = -1
   onLoggedInChanged: Qt.callLater(root.focusInput)
@@ -132,6 +131,7 @@ Panel {
     if (opened) {
       cur = -1; head = -1; btnFocus = false
       moveGate.reset()
+      Qt.callLater(function() { if (list.contentHeight < list.height) root.requestMore() })
       Qt.callLater(root.focusInput)
     }
   }
@@ -431,6 +431,7 @@ Panel {
           boundsBehavior: Flickable.StopAtBounds
           model: root.shown
           onContentYChanged: if (contentHeight - contentY - height < height * 0.5) root.requestMore()
+          onContentHeightChanged: if (contentHeight < height) root.requestMore()   // list too short to scroll
 
           delegate: CursorSurface {
             id: row

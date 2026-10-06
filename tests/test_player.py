@@ -568,7 +568,7 @@ async def test_like_updates_ids_and_offset():
     off = p.like_off
     api.liked_add = ["0"]
     await p.like()
-    assert p.like_ids[0] == "0" or "0" not in p.like_ids   # was liked: removed
+    assert p.like_ids[0] == "1" and "0" not in p.like_ids   # was liked: removed
     assert p.like_off == off - 1
 
 
@@ -612,3 +612,47 @@ async def test_dislike_targets_audible_track():
     await p.start_wave(None)
     await p.dislike()
     assert api.disliked == ["0"] and p.index == 0
+
+
+# --- fix round 2 ---
+
+
+async def test_stop_then_toggle_resumes_audible_track():
+    p, api, mpv, _ = make()
+    await likes(p); await p.play(2); await p.settle()
+    await p.start_wave(None)                 # detached
+    await p.stop()
+    await p.toggle(); await p.settle()
+    assert mpv.playlist == ["url2"] and p.playing is True and p.state()["track"]["id"] == "2"
+    mpv.calls.clear()
+    await p.toggle()
+    assert mpv.calls == [("get_property", "idle-active"), ("cycle", "pause")]
+
+
+async def test_stop_then_toggle_with_index_resumes_now_not_marker():
+    p, api, mpv, _ = make()
+    await likes(p); await p.play(1); await p.settle()
+    await p.stop(); p.index = 3
+    await p.toggle(); await p.settle()
+    assert p.index == 1 and mpv.playlist[p.loaded.index(1)] == "url1"
+
+
+async def test_eof_when_neighbour_arrived_after_idle():
+    p, api, mpv, _ = make()
+    await likes(p)                            # loaded [0, 1]
+    mpv.playlist = []                         # mpv hit EOF and went idle before the neighbour was appended
+    await p.on_event({"event": "end-file", "reason": "eof"})
+    assert p.index == 1 and mpv.playlist[0] == "url1"
+
+
+async def test_station_more_is_capped_and_search_empty_page_ends():
+    p, api, mpv, _ = make()
+    await p.start_wave(None)
+    p.queue += [p.queue[0]] * 100
+    assert p.state()["has_more"] is False
+    s = NS(results=[track(900)], total=5)
+    p2, api2, _m, _n = make(search_tracks=s)
+    await p2.search("x")
+    api2.search_tracks.results = []
+    await p2.more()
+    assert p2.state()["has_more"] is False
