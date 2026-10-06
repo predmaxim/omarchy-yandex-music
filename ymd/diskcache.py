@@ -1,4 +1,5 @@
-"""On-disk copies of liked tracks: <cache>/predmaxim.yandex-music/tracks/<id>.mp3, LRU by mtime."""
+"""On-disk copies of liked tracks (<cache>/predmaxim.yandex-music/tracks/<id>.mp3) and of covers
+(covers/<sha1 of url>.jpg), LRU by mtime."""
 import os
 import shutil
 import time
@@ -7,6 +8,8 @@ from pathlib import Path
 
 DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "predmaxim.yandex-music" / "tracks"
 LIMIT = 2 << 30
+COVERS = DIR.parent / "covers"
+COVER_LIMIT = 200 << 20
 
 
 def fetch(url, path):
@@ -14,13 +17,13 @@ def fetch(url, path):
         shutil.copyfileobj(r, f)
 
 
-def trim(d, limit=LIMIT):
+def trim(d, limit=LIMIT, pattern="*.mp3"):
     """Delete the least recently used files (play touches mtime) until under the limit."""
     parts = list(d.glob("*.part"))
     for f in parts[:]:
         if time.time() - f.stat().st_mtime > 3600:  # abandoned download
             f.unlink(); parts.remove(f)
-    files = sorted((f for f in d.glob("*.mp3")), key=lambda f: f.stat().st_mtime)
+    files = sorted(d.glob(pattern), key=lambda f: f.stat().st_mtime)
     total = sum(f.stat().st_size for f in files + parts)
     for f in files:
         if total <= limit:

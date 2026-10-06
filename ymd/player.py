@@ -11,6 +11,7 @@ the window and sends wave feedback. A stream link is fetched right before it
 is loaded: links expire.
 """
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -39,6 +40,7 @@ class Player:
     def __init__(self, api, mpv, notify, cache_dir=None, download=None):
         self.api, self.mpv, self.notify = api, mpv, notify
         self.cache_dir, self.download = cache_dir or diskcache.DIR, download or diskcache.fetch
+        self.covers_dir = self.cache_dir.parent / diskcache.COVERS.name
         self.urls, self.tasks, self.downloading = {}, set(), set()
         self.gen, self.duration, self.faded, self.wave_mood = 0, 0.0, False, None
         self.feed = self.play_feed = Feed({"type": "none", "title": "", "mood": ""})
@@ -273,6 +275,7 @@ class Player:
             raise
         self.now, self.time_pos, self.duration, self.faded = self.play_queue[playable_i], 0.0, 0.0, False  # mpv has it
         self.loaded = [playable_i]  # before anything else can fail: mpv holds exactly this
+        self._spawn(self._fetch_covers(self.now))
         self._spawn(self._after_play(gen, playable_i, skip))
         await self.mpv.command("set_property", "pause", False)  # pause is global in mpv
         self.playing = True
@@ -326,6 +329,44 @@ class Player:
         finally:
             self.downloading.discard(t)
 
+    def _cover_file(self, url):
+        return self.covers_dir / (hashlib.sha1(url.encode()).hexdigest() + ".jpg")
+
+    def _cover(self, url):
+        """The disk copy of a cover once downloaded (the shell shows it at once), else the URL."""
+        f = url and self._cover_file(url)
+        return f"file://{f}" if f and f.exists() else url
+
+    async def _fetch_covers(self, t):
+        """Download a track's covers (header 200x200, My Wave 600x600) into the disk cache."""
+        got = False
+        for url in (t["cover"], t["cover_big"]):
+            f = url and self._cover_file(url)
+            if not f or url in self.downloading:
+                continue
+            if f.exists():
+                os.utime(f)  # LRU: touch on play
+                continue
+            self.downloading.add(url)
+            part = f.with_suffix(".part")
+            try:
+                self.covers_dir.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(self.download, url, str(part))
+                part.rename(f)
+                got = True
+            except Exception as e:
+                log.warning("cover %s: %s", url, e)
+                part.unlink(missing_ok=True)
+            finally:
+                self.downloading.discard(url)
+        if got and self.now is t:
+            self.notify()  # the window switches to the local copy
+        if got:
+            try:
+                await asyncio.to_thread(diskcache.trim, self.covers_dir, diskcache.COVER_LIMIT, "*.jpg")
+            except OSError as e:  # a parallel download renamed its .part under it: the next trim catches up
+                log.warning("trim covers: %s", e)
+
     async def reload(self):
         """mpv restarted: load the current track again."""
         async with self.lock:
@@ -342,6 +383,7 @@ class Player:
             if url is not None:
                 await self._load(url, "append")
                 self.loaded.append(n)
+            self._spawn(self._fetch_covers(self.play_queue[n]))  # the next track's covers, ready when it starts
         self._spawn(self._prefetch(n + 1))
 
     async def _on_pos(self, p):
@@ -373,6 +415,7 @@ class Player:
         await self._feedback("trackStarted", self.index)
         self.notify()
         self._spawn(self._cache_liked(self.now["id"]))
+        self._spawn(self._fetch_covers(self.now))
 
     async def _feedback(self, kind, i):
         if self.play_feed.station:
@@ -519,7 +562,8 @@ class Player:
     # --- state ---------------------------------------------------------------
     def state(self):
         cur = self.now
-        track = dict(cur, liked=cur["id"] in self.liked) if cur else None
+        track = dict(cur, liked=cur["id"] in self.liked, cover=self._cover(cur["cover"]),
+                     cover_big=self._cover(cur["cover_big"])) if cur else None
         row = lambda t: {"id": t["id"], "title": t["title"], "artists": t["artists"]}
         return {"source": self.source, "play_source": self.play_source, "moods": MOODS,
                 "playing": self.playing, "track": track, "queue": [row(t) for t in self.queue],
