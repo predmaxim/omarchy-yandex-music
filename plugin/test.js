@@ -25,6 +25,11 @@ assert.deepStrictEqual(JSON.parse(M.cmd("wave", { mood: null })), { cmd: "wave",
 // Indicator: lit while playing or paused with a track; tooltip "artists — title"
 const at = p => Object.assign({}, st, p)
 assert.deepStrictEqual([M.view(st).lit, M.view(st).icon], [true, M.ICONS.playing])
+// Icons: play while playing, pause while paused, plain note when empty (no crossed-out note)
+assert.strictEqual(M.ICONS.playing, String.fromCodePoint(0xF040A))
+assert.strictEqual(M.ICONS.paused, String.fromCodePoint(0xF03E4))
+assert.strictEqual(M.ICONS.empty, String.fromCodePoint(0xF075A))
+for (const s of [M.OFFLINE, at({ track: null }), at({ auth: "none", track: null })]) assert.strictEqual(M.view(s).icon, M.ICONS.empty)
 assert.deepStrictEqual([M.view(at({ playing: false })).lit, M.view(at({ playing: false })).icon], [true, M.ICONS.paused])
 const vv = M.view(st); assert.strictEqual(ru(vv.tip, vv.arg, vv.arg2), "Кино — Группа крови")
 assert.strictEqual(M.view(at({ track: null, playing: false })).lit, false)
