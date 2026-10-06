@@ -35,7 +35,7 @@ class Player:
         self.playing, self.time_pos, self.last_end, self.error = False, 0.0, None, None
         self.search_text, self.results, self.search_page, self.search_total = "", [], 0, 0
         self.like_ids, self.like_ids_at, self.like_off, self.likes_page1 = [], None, 0, None
-        self.loading = False
+        self.loading, self.now = False, None  # now: the track mpv plays, whatever the queue shows
         self.lock = asyncio.Lock()
 
     # --- sources -----------------------------------------------------------
@@ -252,6 +252,7 @@ class Player:
             restore()  # the marker follows what mpv plays
             self.notify()
             raise
+        self.now = self.queue[playable_i]
         self.loaded = [playable_i]  # before anything else can fail: mpv holds exactly this
         self._spawn(self._after_play(gen, playable_i, skip))
         await self.mpv.command("set_property", "pause", False)  # pause is global in mpv
@@ -328,6 +329,7 @@ class Player:
         if p is None or not 0 <= p < len(self.loaded) or self.loaded[p] == self.index:
             return
         old, self.index = self.index, self.loaded[p]
+        self.now = self.queue[self.index]
         if self.station and self.last_end != "error":
             await self._feedback("trackFinished" if self.last_end == "eof" else "skip", old)
         self.time_pos, self.duration, self.faded = 0.0, 0.0, False
@@ -372,8 +374,8 @@ class Player:
         name, data = msg.get("name"), msg.get("data")
         if msg.get("event") == "end-file":
             self.last_end = msg.get("reason")
-            if self.last_end == "error" and 0 <= self.index < len(self.queue):
-                tid = self.queue[self.index]["id"]
+            if self.last_end == "error" and self.now:
+                tid = self.now["id"]
                 self.urls.pop(tid, None)  # stale link: refetch next time
                 if f := self._local(tid):
                     f.unlink(missing_ok=True)  # maybe a bad copy
@@ -399,7 +401,7 @@ class Player:
             self.playing = False
         elif name == "time-pos":
             self.time_pos = data or 0.0
-            if (not self.faded and self.loaded and self.duration > 2 * FADE_S
+            if (not self.faded and self.now and self.duration > 2 * FADE_S
                     and self.time_pos >= self.duration - FADE_S):
                 self.faded = True  # once per track; a skip loads a file that resets af
                 await self.mpv.command("af", "add", f"@fo:lavfi=[afade=t=out:st={self.time_pos}:d={self.duration - self.time_pos}]")
@@ -423,7 +425,7 @@ class Player:
             self.notify()
 
     async def seek(self, seconds):
-        if not self.loaded:
+        if not self.now:
             return
         s = min(max(seconds, 0.0), self.duration or seconds)
         await self.mpv.command("seek", s, "absolute")
@@ -436,6 +438,10 @@ class Player:
     async def _step(self, d, kind="skip"):
         """Lock held. At the edge of the window (neighbour not loaded) play from the queue."""
         n = self.index + d
+        if self.index < 0 and d < 0 and self.now:  # detached track: previous restarts it
+            await self.mpv.command("seek", 0, "absolute")
+            self.time_pos = 0.0; self.notify()
+            return
         if n >= 0 and (not self.loaded or self.loaded[-1 if d > 0 else 0] == self.index):
             if d > 0 and n >= len(self.queue):
                 await self._refill()
@@ -454,9 +460,9 @@ class Player:
 
     async def like(self):
         async with self.lock:
-            if not (0 <= self.index < len(self.queue)):
+            if not self.now:
                 return
-            tid = self.queue[self.index]["id"]
+            tid = self.now["id"]
             if tid in self.liked:
                 await self.api.users_likes_tracks_remove(tid); self.liked.discard(tid)
                 if tid in self.like_ids:
@@ -470,14 +476,14 @@ class Player:
 
     async def dislike(self):
         async with self.lock:
-            if not (0 <= self.index < len(self.queue)):
+            if not self.now:
                 return
-            await self.api.users_dislikes_tracks_add(self.queue[self.index]["id"])
+            await self.api.users_dislikes_tracks_add(self.now["id"])
             await self._step(1)
 
     # --- state ---------------------------------------------------------------
     def state(self):
-        cur = self.queue[self.index] if 0 <= self.index < len(self.queue) else None
+        cur = self.now
         track = dict(cur, liked=cur["id"] in self.liked) if cur else None
         row = lambda t: {"id": t["id"], "title": t["title"], "artists": t["artists"]}
         return {"source": self.source, "moods": MOODS, "playing": self.playing, "track": track,
