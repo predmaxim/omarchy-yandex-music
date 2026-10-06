@@ -537,7 +537,7 @@ async def test_likes_first_page_then_more():
 
 async def test_source_switch_notifies_before_fetch():
     p, api, mpv, n = make(likes=50)
-    await p.start_likes()
+    await p.start_likes(); await p.start_wave(None)
     seen = []
     orig = api.tracks
     async def spy(ids):
@@ -867,3 +867,19 @@ async def test_eof_of_an_entry_the_window_slid_past_does_not_skip():
     assert p.index == 1 and mpv.playlist == ["url0", "url1"]
     await p.on_event(ended(mpv))                          # track 1's own EOF at the window edge: advance
     assert p.index == 2 and mpv.playlist[0] == "url2"
+
+
+async def test_reselecting_the_shown_source_keeps_its_list():
+    p, api, mpv, _ = make(likes=50)
+    await p.start_wave("calm"); await p.more()
+    f = p.feed
+    await p.start_wave("calm")                            # Wave tab again while the wave is browsed, not played
+    assert p.feed is f and len(api.rotor_calls) == 2 and len(p.queue) == 10
+    await p.start_likes()
+    f = p.feed
+    await p.start_likes()
+    assert p.feed is f
+    p2, api2, _m, _n = make(wave_batches=[[]])
+    await p2.start_wave(None); api2.wave_batches = [[track(300)]]
+    await p2.start_wave(None)                             # an empty list is fetched again
+    assert len(p2.queue) == 1
