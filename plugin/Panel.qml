@@ -60,14 +60,21 @@ Panel {
     var sig = JSON.stringify(r)
     if (sig !== root.shownSig) { root.shownSig = sig; Model.syncRows(rowsModel, r); root.shown = r }
   }
+  // The playing row in view: centred on a fresh list (no playing row: the top), else scrolled just enough.
+  function showPlaying(fresh) {
+    var i = root.shown.findIndex(function(r) { return r.current })
+    if (i >= 0) list.positionViewAtIndex(i, fresh ? ListView.Center : ListView.Contain)
+    else if (fresh) list.positionViewAtBeginning()
+  }
   onMusicChanged: {
     var sig = JSON.stringify(root.music.source) + (root.music.search ? root.music.search.text : "")
-    if (sig !== root.sourceSig) {   // another list: start it from the top
-      root.sourceSig = sig; root.askedAt = -1
-      Qt.callLater(function() { list.positionViewAtBeginning() })
-    }
-    if (root.pendingIndex >= 0 && root.music.index !== root.seenIndex) root.pendingIndex = -1   // ymd answered
+    var fresh = sig !== root.sourceSig   // another list, or the window just opened
+    if (fresh) { root.sourceSig = sig; root.askedAt = -1 }
+    var moved = root.music.index !== root.seenIndex
+    if (root.pendingIndex >= 0 && moved) root.pendingIndex = -1   // ymd answered
     root.seenIndex = root.music.index
+    // The next track follows into view, unless the keyboard is browsing the list.
+    if (fresh || (moved && root.row !== "list")) Qt.callLater(root.showPlaying, fresh)
     if (root.pendingMood === Model.shownMood(root.music, "")) root.pendingMood = ""   // ymd has it
     root.pos = Model.position(root.music, 0)   // 0 while the new file has no length yet
     root.posStamp = Date.now()
