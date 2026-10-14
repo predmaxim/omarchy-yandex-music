@@ -418,7 +418,7 @@ async def test_state_position_duration_and_seek():
 async def test_fade_in_option_and_fade_out_once():
     p, api, mpv, _ = make()
     await likes(p)
-    assert ("loadfile", "url0", "replace", -1, "af=lavfi=[afade=t=in:d=3]") in mpv.calls
+    assert ("loadfile", "url0", "replace", -1, "af=lavfi=[afade=t=in:d=3],force-media-title=%8%a — t0") in mpv.calls
     await p.on_event({"event": "property-change", "name": "duration", "data": 200.0})
     for t in (100.0, 197.0, 198.0):
         await p.on_event({"event": "property-change", "name": "time-pos", "data": t})
@@ -883,3 +883,15 @@ async def test_reselecting_the_shown_source_keeps_its_list():
     await p2.start_wave(None); api2.wave_batches = [[track(300)]]
     await p2.start_wave(None)                             # an empty list is fetched again
     assert len(p2.queue) == 1
+
+
+async def test_loadfile_hands_mpv_the_cached_cover_for_mpris():
+    """mpv-mpris shows a cover only from a local file it knows at the file's start (cover-art-files)."""
+    p, api, mpv, n = make(download=fake_download)
+    for t in api.likes:
+        t.cover_uri = f"avatars.yandex.net/{t.id}/%%"
+    await likes(p)
+    loads = {c[1]: c[4] for c in mpv.calls if c[0] == "loadfile"}
+    for i in (0, 1):   # the audible one (waited for) and the appended next one
+        f = cover_file(p, f"https://avatars.yandex.net/{i}/200x200")
+        assert f"cover-art-files=%{len(str(f).encode())}%{f}" in loads[f"url{i}"] and f.exists()

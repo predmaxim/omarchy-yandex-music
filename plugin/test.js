@@ -3,7 +3,7 @@ const fs = require("fs")
 const assert = require("assert")
 const load = (file, names) =>
   new Function(fs.readFileSync(__dirname + "/" + file, "utf8").replace(".pragma library", "") + "; return { " + names + " }")()
-const M = load("Model.js", "OFFLINE, ICONS, WAVE_CONTROLS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, HEAD, syncRows, waveView, waveControls, controlCmd, control, waveMood, moodLabel, TABS, controlEnabled, initialCursor, cursorRows, moveCursor, sideCursor, screenCursor, controlRow, shownMood, moodToSend, MOOD_DELAY")
+const M = load("Model.js", "OFFLINE, ICONS, WAVE_CONTROLS, parse, cmd, view, subtitle, rows, searching, moodOptions, fmtTime, position, wantMore, canToggle, playing, HEAD, syncRows, waveView, waveControls, controlCmd, control, waveMood, moodLabel, TABS, controlEnabled, initialCursor, cursorRows, moveCursor, sideCursor, screenCursor, controlRow, shownMood, moodToSend, MOOD_DELAY")
 const I = load("I18n.js", "TABLES, translator")
 const ru = I.translator("ru")
 
@@ -40,6 +40,10 @@ const vv = M.view(st); assert.strictEqual(ru(vv.tip, vv.arg, vv.arg2), "Кино
 assert.strictEqual(M.view(at({ track: null, playing: false })).lit, false)
 assert.strictEqual(ru(M.view(M.OFFLINE).tip), "Сервис музыки не запущен")
 assert.strictEqual(ru(M.view(at({ auth: "none", track: null })).tip), "Яндекс Музыка: нужен вход")
+
+// Bar indicator: lit only while sounding
+assert.strictEqual(M.playing(st), true)
+for (const s of [at({ playing: false }), at({ track: null }), at({ auth: "none" }), M.OFFLINE, null]) assert.strictEqual(M.playing(s), false)
 
 // Subtitle: artists · source · mood
 assert.strictEqual(M.subtitle(st, ru), "Кино · Моя волна · Спокойное")

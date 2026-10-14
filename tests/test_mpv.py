@@ -147,3 +147,22 @@ async def test_loadfile_per_file_af_and_fade_out_on_real_mpv(tmp_path):
         assert await mpv.command("af", "remove", "@fo") is None                              # absent label is fine
     finally:
         await mpv.stop()
+
+
+async def test_loadfile_title_reaches_media_title_on_real_mpv(tmp_path):
+    """MPRIS shows media-title; without force-media-title it is the link's file name."""
+    import shutil, subprocess
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg missing")
+    f = tmp_path / "be06x-Ug.mp3"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=3", str(f)], check=True)
+    from ymd.player import file_options
+    mpv = Mpv(str(tmp_path / "mpv.sock"), lambda e: asyncio.sleep(0))
+    await mpv.start()
+    try:
+        await mpv.command("loadfile", str(f), "replace", -1, file_options({"artists": "Кино, Цой", "title": "Группа крови [live]"}))
+        await asyncio.sleep(0.3)
+        assert await mpv.command("get_property", "media-title") == "Кино, Цой — Группа крови [live]"
+        assert (await mpv.command("get_property", "af"))[0]["params"]["graph"] == "afade=t=in:d=3"
+    finally:
+        await mpv.stop()

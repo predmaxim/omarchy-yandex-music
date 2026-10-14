@@ -54,6 +54,9 @@ function view(st) {
   return { lit: true, icon: st.playing ? ICONS.playing : ICONS.paused, tip: "%1 — %2", arg: st.track.artists, arg2: st.track.title }
 }
 
+// The bar indicator is lit only while a track sounds; play/pause lives in predmaxim.media.
+function playing(st) { return canToggle(st) && !!st.playing }
+
 function moodLabel(mood, tr) { return tr(MOOD_LABELS[mood || "all"] || mood) }
 
 function sourceName(src, tr) {

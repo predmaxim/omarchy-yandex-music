@@ -23,7 +23,19 @@ log = logging.getLogger("ymd")
 WAVE = "user:onyourwave"
 MOODS = ["all", "fun", "active", "calm", "sad"]
 FADE_S = 3
+COVER_WAIT = 1.0  # s a track about to start waits for its cover to download
 FADE_IN = f"af=lavfi=[afade=t=in:d={FADE_S}]"  # per-file: mpv resets it with the next file
+
+
+def _quoted(name, value):
+    return f",{name}=%{len(value.encode())}%{value}"  # %n% quotes n bytes: commas, brackets stay in the value
+
+
+def file_options(track, cover=None):
+    """loadfile options: the fade-in, the title MPRIS shows (else the link's file name) and the cover
+    (mpv-mpris takes one only from a local file known when the file starts)."""
+    title = " — ".join(x for x in (track.get("artists"), track.get("title")) if x)
+    return FADE_IN + (_quoted("force-media-title", title) if title else "") + (_quoted("cover-art-files", str(cover)) if cover else "")
 URL_TTL = 600
 PAGE = 20
 MAX_STATION_ROWS = 100  # the list stops growing from scrolling here
@@ -196,6 +208,7 @@ class Player:
         t = asyncio.create_task(coro)
         self.tasks.add(t)
         t.add_done_callback(self.tasks.discard)
+        return t
 
     async def settle(self):
         """Await pending background work (neighbours, feedback, prefetch, downloads)."""
@@ -221,8 +234,13 @@ class Player:
             self.urls[tid] = (url, time.monotonic())
         return url
 
-    async def _load(self, url, mode, index=-1):
-        await self.mpv.command("loadfile", url, mode, index, FADE_IN)
+    async def _load(self, i, url, mode, index=-1):
+        t = self.play_queue[i]
+        cover = t["cover"] and self._cover_file(t["cover"])
+        if cover and mode == "replace" and not cover.exists():
+            # starts at once: give its cover a moment, later ones get it while the track before plays
+            await asyncio.wait([self._spawn(self._fetch_cover(t))], timeout=COVER_WAIT)
+        await self.mpv.command("loadfile", url, mode, index, file_options(t, cover))
 
     async def play(self, i):
         """Row i of the window: its feed becomes the play queue."""
@@ -273,7 +291,7 @@ class Player:
                     self.notify()
                     return
             self.index = playable_i
-            await self._load(url, "replace")
+            await self._load(playable_i, url, "replace")
         except BaseException:
             restore()  # the marker follows what mpv plays
             self.notify()
@@ -297,7 +315,7 @@ class Player:
                 if i > 0:
                     prev_url = await self._url(i - 1)
                     if prev_url is not None:
-                        await self._load(prev_url, "insert-at", 0)
+                        await self._load(i - 1, prev_url, "insert-at", 0)
                         self.loaded.insert(0, i - 1)
                 if self.play_feed.station and not self.play_feed.started:  # radioStarted goes out with the first play
                     self.play_feed.started = True
@@ -385,7 +403,7 @@ class Player:
         if n < len(self.play_queue):
             url = await self._url(n)
             if url is not None:
-                await self._load(url, "append")
+                await self._load(n, url, "append")
                 self.loaded.append(n)
             self._spawn(self._fetch_cover(self.play_queue[n]))  # the next track's cover, ready when it starts
         self._spawn(self._prefetch(n + 1))
@@ -414,7 +432,7 @@ class Player:
             if p == 0 and self.index > 0:
                 prev_url = await self._url(self.index - 1)
                 if prev_url is not None:
-                    await self._load(prev_url, "insert-at", 0)
+                    await self._load(self.index - 1, prev_url, "insert-at", 0)
                     self.loaded.insert(0, self.index - 1)
         await self._feedback("trackStarted", self.index)
         self.notify()
