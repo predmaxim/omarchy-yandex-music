@@ -4,7 +4,6 @@ After=graphical-session.target pipewire.service
 PartOf=graphical-session.target
 
 [Service]
-WorkingDirectory=%h/Projects/omarchy-yandex-music
 ExecStart=/usr/bin/python -m ymd
 Restart=on-failure
 RestartSec=2

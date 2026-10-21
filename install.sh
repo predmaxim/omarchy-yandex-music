@@ -12,6 +12,9 @@ done
 
 mkdir -p ~/.config/systemd/user ~/.config/omarchy/plugins
 ln -sfn "$PWD/systemd/ymd.service" ~/.config/systemd/user/ymd.service
+# ymd runs from this clone, wherever it lives
+mkdir -p ~/.config/systemd/user/ymd.service.d
+printf '[Service]\nWorkingDirectory=%s\n' "$PWD" >~/.config/systemd/user/ymd.service.d/workdir.conf
 # Значок в группе индикаторов копирует хук patch_indicators (omarchy-dotfiles)
 ln -sfn "$PWD/plugin" ~/.config/omarchy/plugins/predmaxim.yandex-music
 
